@@ -1,115 +1,31 @@
 import streamlit as st
 import pandas as pd
-import math
-import base64
 import json
-
-from supabase import create_client
+import math
 import folium
+from folium.plugins import Fullscreen
 from streamlit_folium import st_folium
-from geopy.geocoders import Nominatim
+from supabase import create_client
 
+st.set_page_config(page_title="Suly Transit", layout="wide")
 
-st.set_page_config(page_title="Suly Transit System", layout="wide")
-
-
-# --------------------------------------------------
-# BACKGROUND
-# --------------------------------------------------
-def set_background(image_file: str) -> None:
-    with open(image_file, "rb") as img:
-        encoded = base64.b64encode(img.read()).decode()
-
-    page_bg = f"""
-    <style>
-    .stApp {{
-        background-image: linear-gradient(
-            rgba(10, 15, 30, 0.55),
-            rgba(10, 15, 30, 0.70)
-        ), url("data:image/jpg;base64,{encoded}");
-        background-size: cover;
-        background-position: center;
-        background-attachment: fixed;
-    }}
-
-    [data-testid="stHeader"] {{
-        background: rgba(0, 0, 0, 0);
-    }}
-
-    .block-container {{
-        background-color: rgba(0, 0, 0, 0.08);
-        padding: 2rem;
-        border-radius: 18px;
-    }}
-
-    .glass-card {{
-        background: rgba(10, 20, 35, 0.45);
-        border: 1px solid rgba(255,255,255,0.08);
-        backdrop-filter: blur(8px);
-        padding: 1rem 1.2rem;
-        border-radius: 16px;
-        margin-bottom: 1rem;
-    }}
-    </style>
-    """
-    st.markdown(page_bg, unsafe_allow_html=True)
-
-
-set_background("assets/suli_bg.jpg")
-
-
-# --------------------------------------------------
-# SUPABASE
-# --------------------------------------------------
+# -----------------------------
+# Supabase
+# -----------------------------
 def get_supabase():
     url = st.secrets["SUPABASE_URL"]
     key = st.secrets["SUPABASE_KEY"]
     return create_client(url, key)
 
-
 supabase = get_supabase()
 
-
-# --------------------------------------------------
-# GEOCODER
-# --------------------------------------------------
-@st.cache_resource
-def get_geocoder():
-    return Nominatim(user_agent="suly_transit_passenger")
-
-
-geocoder = get_geocoder()
-
-
-# --------------------------------------------------
-# ROUTE COLORS
-# Names must match GeoJSON exactly
-# --------------------------------------------------
-ROUTE_COLORS = {
-    "Bakrajo_Bazar": "#e41a1c",
-    "Chwarchra_Bazar": "#377eb8",
-    "FarmanBaran_Bazar": "#4daf4a",
-    "HawaryShar_Bazar": "#984ea3",
-    "Kazywa_Bazar": "#ff7f00",
-    "Kshtukal_Bazar": "#a65628",
-    "Qrgra_Bazar": "#f781bf",
-    "Raparin_Bazar": "#999999",
-    "Rzgary Bazar": "#66c2a5",
-    "Shakraka_Bazar": "#fc8d62",
-    "TwiMalik_Bazar": "#8da0cb",
-    "Xabat_Bazar": "#ffd92f",
-    "ZargatayTaza_Bazar": "#1b9e77",
-}
-
-
-# --------------------------------------------------
-# HELPERS
-# --------------------------------------------------
-def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+# -----------------------------
+# Helpers
+# -----------------------------
+def haversine_km(lat1, lon1, lat2, lon2):
     r = 6371.0
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
-
     a = (
         math.sin(dlat / 2) ** 2
         + math.cos(math.radians(lat1))
@@ -119,35 +35,14 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return r * c
 
-
-def geocode_address(address: str):
-    if not address.strip():
-        return None
-
-    try:
-        query = f"{address}, Sulaymaniyah, Iraq"
-        result = geocoder.geocode(query, timeout=10)
-        if result:
-            return {
-                "label": result.address,
-                "lat": result.latitude,
-                "lon": result.longitude,
-            }
-    except Exception:
-        return None
-
-    return None
-
-
 @st.cache_data
-def load_routes_geojson(path="assets/bus_lines.geojson"):
-    with open(path, "r", encoding="utf-8") as f:
+def load_routes():
+    with open("assets/bus_lines.geojson", "r", encoding="utf-8") as f:
         return json.load(f)
 
-
+@st.cache_data
 def extract_route_points(routes_geojson):
     rows = []
-
     for feature in routes_geojson["features"]:
         route_name = feature["properties"].get("layer", "Unknown Route")
         geometry = feature.get("geometry", {})
@@ -164,292 +59,218 @@ def extract_route_points(routes_geojson):
                         "lon": lon,
                     }
                 )
-
     return pd.DataFrame(rows)
 
-
-def nearest_route(point_lat: float, point_lon: float, routes_geojson):
-    route_points_df = extract_route_points(routes_geojson).copy()
-
-    if route_points_df.empty:
-        return None
-
-    route_points_df["distance_km"] = route_points_df.apply(
+def nearest_route(point_lat, point_lon, route_points_df):
+    df = route_points_df.copy()
+    df["distance_km"] = df.apply(
         lambda row: haversine_km(point_lat, point_lon, row["lat"], row["lon"]),
         axis=1,
     )
+    return df.sort_values("distance_km").iloc[0].to_dict()
 
-    nearest = route_points_df.sort_values("distance_km").iloc[0]
-    return nearest.to_dict()
-
-
-def get_live_buses() -> pd.DataFrame:
+def get_live_buses():
     result = supabase.table("live_bus_data").select("*").execute()
     if result.data:
         return pd.DataFrame(result.data)
     return pd.DataFrame(columns=["plate_number", "driver_name", "line_id", "lat", "lon", "last_ping"])
 
-
-def build_passenger_map(
-    routes_geojson,
-    live_buses_df=None,
-    origin_point=None,
-    destination_point=None,
-    highlight_route=None,
-):
-    m = folium.Map(
-        location=[35.56, 45.43],
-        zoom_start=12,
-        tiles="OpenStreetMap",
-        control_scale=True,
-    )
-
-    for feature in routes_geojson["features"]:
-        route_name = feature["properties"].get("layer", "Bus Route")
-        color = ROUTE_COLORS.get(route_name, "#00bfff")
-
-        if highlight_route:
-            opacity = 0.95 if route_name == highlight_route else 0.25
-            weight = 6 if route_name == highlight_route else 3
-        else:
-            opacity = 0.85
-            weight = 5
-
-        folium.GeoJson(
-            feature,
-            name=route_name,
-            tooltip=route_name,
-            style_function=lambda x, color=color, weight=weight, opacity=opacity: {
-                "color": color,
-                "weight": weight,
-                "opacity": opacity,
-            },
-        ).add_to(m)
-
-    if live_buses_df is not None and not live_buses_df.empty:
-        for _, row in live_buses_df.iterrows():
-            folium.Marker(
-                location=[row["lat"], row["lon"]],
-                popup=(
-                    f"Bus: {row['plate_number']}<br>"
-                    f"Driver: {row.get('driver_name', 'Unknown')}<br>"
-                    f"Line: {row.get('line_id', 'Unknown')}<br>"
-                    f"Last ping: {row.get('last_ping', 'N/A')}"
-                ),
-                tooltip=f"Bus {row['plate_number']}",
-                icon=folium.Icon(color="orange", icon="bus", prefix="fa"),
-            ).add_to(m)
-
-    if origin_point:
-        folium.Marker(
-            location=[origin_point["lat"], origin_point["lon"]],
-            popup=origin_point.get("label", "Origin"),
-            tooltip="Origin",
-            icon=folium.Icon(color="green", icon="play"),
-        ).add_to(m)
-
-    if destination_point:
-        folium.Marker(
-            location=[destination_point["lat"], destination_point["lon"]],
-            popup=destination_point.get("label", "Destination"),
-            tooltip="Destination",
-            icon=folium.Icon(color="red", icon="flag"),
-        ).add_to(m)
-
-    return m
-
-
-# --------------------------------------------------
-# SESSION STATE
-# --------------------------------------------------
-defaults = {
-    "origin_point": None,
-    "destination_point": None,
-    "pick_mode": None,  # "origin" or "destination"
+# -----------------------------
+# Colors
+# -----------------------------
+ROUTE_COLORS = {
+    "Bakrajo_Bazar": "#e41a1c",
+    "Chwarchra_Bazar": "#377eb8",
+    "FarmanBaran_Bazar": "#4daf4a",
+    "HawaryShar_Bazar": "#984ea3",
+    "Kazywa_Bazar": "#ff7f00",
+    "Kshtukal_Bazar": "#a65628",
+    "Qrgra_Bazar": "#f781bf",
+    "Raparin_Bazar": "#999999",
+    "Rzgary Bazar": "#66c2a5",
+    "Shakraka_Bazar": "#fc8d62",
+    "TwiMalik_Bazar": "#8da0cb",
+    "Xabat_Bazar": "#ffd92f",
+    "ZargatayTaza_Bazar": "#1b9e77",
 }
-for key, value in defaults.items():
-    if key not in st.session_state:
-        st.session_state[key] = value
 
+# -----------------------------
+# Session state
+# -----------------------------
+if "origin_point" not in st.session_state:
+    st.session_state.origin_point = None
+if "destination_point" not in st.session_state:
+    st.session_state.destination_point = None
+if "pick_mode" not in st.session_state:
+    st.session_state.pick_mode = "origin"
 
-# --------------------------------------------------
-# UI
-# --------------------------------------------------
-st.title("Suly Transit System")
-st.header("Passenger Portal")
-
-routes_geojson = load_routes_geojson("assets/bus_lines.geojson")
+# -----------------------------
+# Load data
+# -----------------------------
+routes_geojson = load_routes()
+route_points_df = extract_route_points(routes_geojson)
 live_df = get_live_buses()
 
-st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-st.subheader("Trip Planner")
+# -----------------------------
+# UI
+# -----------------------------
+st.title("Suly Transit")
 
-input_mode = st.radio(
-    "Choose input mode",
-    ["Type address", "Choose from map"],
-    horizontal=True,
-)
+c1, c2, c3 = st.columns(3)
 
-col1, col2, col3 = st.columns([2, 2, 1])
+with c1:
+    if st.button("Pick Origin"):
+        st.session_state.pick_mode = "origin"
 
-with col1:
-    if input_mode == "Type address":
-        origin_text = st.text_input(
-            "Origin",
-            placeholder="Example: Azadi Park",
-            key="origin_text_input",
-        )
-        if st.button("Set origin from address"):
-            point = geocode_address(origin_text)
-            if point:
-                st.session_state.origin_point = point
-                st.success("Origin set from typed address.")
-            else:
-                st.error("Could not find that origin address.")
-    else:
-        st.write("Pick origin by clicking on the map.")
-        if st.button("Pick Origin From Map"):
-            st.session_state.pick_mode = "origin"
+with c2:
+    if st.button("Pick Destination"):
+        st.session_state.pick_mode = "destination"
 
-with col2:
-    if input_mode == "Type address":
-        destination_text = st.text_input(
-            "Destination",
-            placeholder="Example: City Center",
-            key="destination_text_input",
-        )
-        if st.button("Set destination from address"):
-            point = geocode_address(destination_text)
-            if point:
-                st.session_state.destination_point = point
-                st.success("Destination set from typed address.")
-            else:
-                st.error("Could not find that destination address.")
-    else:
-        st.write("Pick destination by clicking on the map.")
-        if st.button("Pick Destination From Map"):
-            st.session_state.pick_mode = "destination"
+with c3:
+    if st.button("Clear"):
+        st.session_state.origin_point = None
+        st.session_state.destination_point = None
+        st.session_state.pick_mode = "origin"
+        st.rerun()
 
-with col3:
-    st.write("")
-    st.write("")
-    if st.button("Use My Location"):
-        st.warning("Browser geolocation is easier to add after the passenger map is working.")
+st.caption(f"Current selection mode: {st.session_state.pick_mode}")
 
-st.markdown("</div>", unsafe_allow_html=True)
-
+# -----------------------------
+# Route suggestion logic
+# -----------------------------
 highlight_route = None
+trip_result = None
+
 if st.session_state.origin_point and st.session_state.destination_point:
     origin_route = nearest_route(
         st.session_state.origin_point["lat"],
         st.session_state.origin_point["lon"],
-        routes_geojson,
+        route_points_df,
     )
     destination_route = nearest_route(
         st.session_state.destination_point["lat"],
         st.session_state.destination_point["lon"],
-        routes_geojson,
+        route_points_df,
     )
 
-    if origin_route and destination_route and origin_route["route_name"] == destination_route["route_name"]:
-        highlight_route = origin_route["route_name"]
-
-passenger_map = build_passenger_map(
-    routes_geojson=routes_geojson,
-    live_buses_df=live_df if not live_df.empty else None,
-    origin_point=st.session_state.origin_point,
-    destination_point=st.session_state.destination_point,
-    highlight_route=highlight_route,
-)
-
-map_data = st_folium(passenger_map, height=650, width="stretch")
-
-clicked = map_data.get("last_clicked") if map_data else None
-if clicked and st.session_state.pick_mode in ("origin", "destination"):
-    clicked_point = {
-        "label": f"Selected point ({clicked['lat']:.5f}, {clicked['lng']:.5f})",
-        "lat": clicked["lat"],
-        "lon": clicked["lng"],
+    trip_result = {
+        "origin_route": origin_route,
+        "destination_route": destination_route,
     }
 
-    if st.session_state.pick_mode == "origin":
-        st.session_state.origin_point = clicked_point
-        st.success("Origin selected from map.")
-    elif st.session_state.pick_mode == "destination":
-        st.session_state.destination_point = clicked_point
-        st.success("Destination selected from map.")
+    if origin_route["route_name"] == destination_route["route_name"]:
+        highlight_route = origin_route["route_name"]
 
-    st.session_state.pick_mode = None
+# -----------------------------
+# Map
+# -----------------------------
+m = folium.Map(
+    location=[35.56, 45.43],
+    zoom_start=12,
+    tiles="CartoDB positron",
+    control_scale=True,
+)
+
+Fullscreen().add_to(m)
+
+for feature in routes_geojson["features"]:
+    route_name = feature["properties"].get("layer", "Bus Route")
+    color = ROUTE_COLORS.get(route_name, "#3388ff")
+
+    if highlight_route:
+        opacity = 0.95 if route_name == highlight_route else 0.20
+        weight = 6 if route_name == highlight_route else 3
+    else:
+        opacity = 0.80
+        weight = 4
+
+    folium.GeoJson(
+        feature,
+        tooltip=route_name,
+        style_function=lambda x, color=color, weight=weight, opacity=opacity: {
+            "color": color,
+            "weight": weight,
+            "opacity": opacity,
+        },
+    ).add_to(m)
+
+if not live_df.empty:
+    for _, row in live_df.iterrows():
+        if pd.notna(row["lat"]) and pd.notna(row["lon"]):
+            folium.CircleMarker(
+                location=[row["lat"], row["lon"]],
+                radius=6,
+                color="orange",
+                fill=True,
+                fill_opacity=0.9,
+                popup=(
+                    f"Bus: {row['plate_number']}<br>"
+                    f"Line: {row.get('line_id', 'Unknown')}"
+                ),
+            ).add_to(m)
+
+if st.session_state.origin_point:
+    folium.Marker(
+        [st.session_state.origin_point["lat"], st.session_state.origin_point["lon"]],
+        tooltip="Origin",
+        icon=folium.Icon(color="green"),
+    ).add_to(m)
+
+if st.session_state.destination_point:
+    folium.Marker(
+        [st.session_state.destination_point["lat"], st.session_state.destination_point["lon"]],
+        tooltip="Destination",
+        icon=folium.Icon(color="red"),
+    ).add_to(m)
+
+map_data = st_folium(m, height=650, width="stretch")
+
+clicked = map_data.get("last_clicked") if map_data else None
+if clicked:
+    point = {"lat": clicked["lat"], "lon": clicked["lng"]}
+
+    if st.session_state.pick_mode == "origin":
+        st.session_state.origin_point = point
+        st.session_state.pick_mode = "destination"
+    else:
+        st.session_state.destination_point = point
+        st.session_state.pick_mode = "origin"
+
     st.rerun()
 
-if st.session_state.origin_point and st.session_state.destination_point:
-    origin_route = nearest_route(
-        st.session_state.origin_point["lat"],
-        st.session_state.origin_point["lon"],
-        routes_geojson,
-    )
-    destination_route = nearest_route(
-        st.session_state.destination_point["lat"],
-        st.session_state.destination_point["lon"],
-        routes_geojson,
-    )
+# -----------------------------
+# Result
+# -----------------------------
+if trip_result:
+    st.subheader("Suggested Route")
 
-    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    st.subheader("Trip Result")
+    origin_route = trip_result["origin_route"]
+    destination_route = trip_result["destination_route"]
 
-    if origin_route:
-        st.write(
-            f"Nearest origin route: **{origin_route['route_name']}** "
-            f"({origin_route['distance_km']:.2f} km away)"
-        )
+    st.write(f"Nearest to origin: **{origin_route['route_name']}**")
+    st.write(f"Nearest to destination: **{destination_route['route_name']}**")
 
-    if destination_route:
-        st.write(
-            f"Nearest destination route: **{destination_route['route_name']}** "
-            f"({destination_route['distance_km']:.2f} km away)"
-        )
+    if origin_route["route_name"] == destination_route["route_name"]:
+        route_name = origin_route["route_name"]
+        st.success(f"Recommended line: {route_name}")
 
-    if origin_route and destination_route:
-        if origin_route["route_name"] == destination_route["route_name"]:
-            route_name = origin_route["route_name"]
-            st.success(f"Recommended route: {route_name}")
+        if not live_df.empty and "line_id" in live_df.columns:
+            line_buses = live_df[live_df["line_id"] == route_name].copy()
 
-            if not live_df.empty:
-                line_buses = live_df[live_df["line_id"] == route_name].copy()
+            if not line_buses.empty:
+                line_buses["eta_minutes"] = line_buses.apply(
+                    lambda row: haversine_km(
+                        row["lat"],
+                        row["lon"],
+                        st.session_state.origin_point["lat"],
+                        st.session_state.origin_point["lon"],
+                    ) / 18 * 60,
+                    axis=1,
+                )
 
-                if not line_buses.empty:
-                    line_buses["eta_minutes"] = line_buses.apply(
-                        lambda row: haversine_km(
-                            row["lat"],
-                            row["lon"],
-                            st.session_state.origin_point["lat"],
-                            st.session_state.origin_point["lon"],
-                        ) / 18 * 60,
-                        axis=1,
-                    )
-
-                    best_bus = line_buses.sort_values("eta_minutes").iloc[0]
-                    st.info(
-                        f"Next bus: {best_bus['plate_number']} | "
-                        f"ETA near your origin: {best_bus['eta_minutes']:.1f} min"
-                    )
-
-                    show_cols = [
-                        c for c in ["plate_number", "driver_name", "last_ping", "eta_minutes"]
-                        if c in line_buses.columns
-                    ]
-                    st.dataframe(
-                        line_buses[show_cols].sort_values("eta_minutes"),
-                        width="stretch",
-                    )
-                else:
-                    st.info("No live buses currently broadcasting on this route.")
+                best_bus = line_buses.sort_values("eta_minutes").iloc[0]
+                st.info(f"Nearest active bus: {best_bus['plate_number']} | ETA: {best_bus['eta_minutes']:.1f} min")
             else:
-                st.info("No live bus data available yet.")
-        else:
-            st.warning(
-                "Origin and destination are closest to different routes. "
-                "Later we can add transfer logic."
-            )
-
-    st.markdown("</div>", unsafe_allow_html=True)
+                st.info("No active bus currently on this line.")
+    else:
+        st.warning("Origin and destination are on different nearby routes.")
