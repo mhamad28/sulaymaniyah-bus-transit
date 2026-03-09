@@ -61,7 +61,7 @@ div[data-testid="stVerticalBlock"] > div:has(.floating-result-anchor) {
     position: fixed;
     top: 96px;
     right: 14px;
-    width: 320px;
+    width: 340px;
     z-index: 9998;
     background: rgba(10, 15, 25, 0.84);
     color: white;
@@ -82,12 +82,6 @@ div[data-testid="stVerticalBlock"] > div:has(.floating-footer-anchor) {
     padding: 10px 14px;
     backdrop-filter: blur(8px);
     box-shadow: 0 6px 18px rgba(0,0,0,0.25);
-}
-
-.map-wrapper {
-    position: fixed;
-    inset: 0;
-    z-index: 1;
 }
 
 div[data-testid="stVerticalBlock"] > div:has(.map-anchor) {
@@ -184,6 +178,25 @@ def get_live_buses():
         return pd.DataFrame(result.data)
     return pd.DataFrame(columns=["plate_number", "driver_name", "line_id", "lat", "lon", "last_ping"])
 
+def best_bus_for_route(live_df, route_name, origin_point):
+    if live_df.empty or "line_id" not in live_df.columns:
+        return None
+
+    line_buses = live_df[live_df["line_id"] == route_name].copy()
+    if line_buses.empty:
+        return None
+
+    line_buses["eta_minutes"] = line_buses.apply(
+        lambda row: haversine_km(
+            row["lat"],
+            row["lon"],
+            origin_point["lat"],
+            origin_point["lon"],
+        ) / 18 * 60,
+        axis=1,
+    )
+    return line_buses.sort_values("eta_minutes").iloc[0].to_dict()
+
 # -----------------------------
 # Route colors
 # -----------------------------
@@ -210,12 +223,12 @@ if "origin_point" not in st.session_state:
     st.session_state.origin_point = None
 if "destination_point" not in st.session_state:
     st.session_state.destination_point = None
-if "pick_mode" not in st.session_state:
-    st.session_state.pick_mode = "origin"
 if "map_center" not in st.session_state:
     st.session_state.map_center = [35.56, 45.43]
 if "map_zoom" not in st.session_state:
     st.session_state.map_zoom = 13
+if "last_click_key" not in st.session_state:
+    st.session_state.last_click_key = None
 
 # -----------------------------
 # Load data
@@ -225,9 +238,9 @@ route_points_df = extract_route_points(routes_geojson)
 live_df = get_live_buses()
 
 # -----------------------------
-# Compute result
+# Compute route result
 # -----------------------------
-highlight_route = None
+highlight_routes = []
 trip_result = None
 
 if st.session_state.origin_point and st.session_state.destination_point:
@@ -248,7 +261,9 @@ if st.session_state.origin_point and st.session_state.destination_point:
     }
 
     if origin_route["route_name"] == destination_route["route_name"]:
-        highlight_route = origin_route["route_name"]
+        highlight_routes = [origin_route["route_name"]]
+    else:
+        highlight_routes = [origin_route["route_name"], destination_route["route_name"]]
 
 # -----------------------------
 # Floating top bar
@@ -257,28 +272,29 @@ with st.container():
     st.markdown('<div class="floating-topbar-anchor"></div>', unsafe_allow_html=True)
     st.markdown("## Suly Transit")
 
-    c1, c2, c3, c4 = st.columns([1.2, 1.2, 1, 2.2])
+    c1, c2, c3 = st.columns([1, 1, 4])
 
     with c1:
-        if st.button("Pick Origin", use_container_width=True):
-            st.session_state.pick_mode = "origin"
-
-    with c2:
-        if st.button("Pick Destination", use_container_width=True):
-            st.session_state.pick_mode = "destination"
-
-    with c3:
-        if st.button("Clear", use_container_width=True):
+        if st.button("Reset Trip", use_container_width=True):
             st.session_state.origin_point = None
             st.session_state.destination_point = None
-            st.session_state.pick_mode = "origin"
+            st.session_state.last_click_key = None
             st.rerun()
 
-    with c4:
-        st.write(f"**Mode:** {st.session_state.pick_mode}")
+    with c2:
+        if st.button("Refresh Buses", use_container_width=True):
+            st.rerun()
+
+    with c3:
+        if st.session_state.origin_point is None:
+            st.write("**Click anywhere on the map to set your origin.**")
+        elif st.session_state.destination_point is None:
+            st.write("**Now click your destination.**")
+        else:
+            st.write("**Trip selected. Click Reset Trip to choose a new journey.**")
 
 # -----------------------------
-# Full screen map
+# Build map
 # -----------------------------
 m = folium.Map(
     location=st.session_state.map_center,
@@ -292,11 +308,11 @@ for feature in routes_geojson["features"]:
     route_name = feature["properties"].get("layer", "Bus Route")
     color = ROUTE_COLORS.get(route_name, "#3388ff")
 
-    if highlight_route:
-        opacity = 0.95 if route_name == highlight_route else 0.15
-        weight = 6 if route_name == highlight_route else 2
+    if highlight_routes:
+        opacity = 0.95 if route_name in highlight_routes else 0.12
+        weight = 6 if route_name in highlight_routes else 2
     else:
-        opacity = 0.80
+        opacity = 0.8
         weight = 3
 
     folium.GeoJson(
@@ -346,6 +362,7 @@ with st.container():
         height=1000,
         width="stretch",
         returned_objects=["last_clicked", "center", "zoom"],
+        key="passenger_map"
     )
 
 if map_data:
@@ -359,16 +376,20 @@ if map_data:
 
 clicked = map_data.get("last_clicked") if map_data else None
 if clicked:
-    point = {"lat": clicked["lat"], "lon": clicked["lng"]}
+    click_key = f"{round(clicked['lat'], 6)}_{round(clicked['lng'], 6)}"
+    if click_key != st.session_state.last_click_key:
+        st.session_state.last_click_key = click_key
+        point = {"lat": clicked["lat"], "lon": clicked["lng"]}
 
-    if st.session_state.pick_mode == "origin":
-        st.session_state.origin_point = point
-        st.session_state.pick_mode = "destination"
-    else:
-        st.session_state.destination_point = point
-        st.session_state.pick_mode = "origin"
+        if st.session_state.origin_point is None:
+            st.session_state.origin_point = point
+        elif st.session_state.destination_point is None:
+            st.session_state.destination_point = point
+        else:
+            st.session_state.origin_point = point
+            st.session_state.destination_point = None
 
-    st.rerun()
+        st.rerun()
 
 # -----------------------------
 # Floating result box
@@ -380,7 +401,7 @@ if trip_result:
     with st.container():
         st.markdown('<div class="floating-result-anchor"></div>', unsafe_allow_html=True)
 
-        st.markdown("### Suggested Route")
+        st.markdown("### Route Advice")
         st.markdown(
             f"""
             <div class="result-small">
@@ -393,30 +414,39 @@ if trip_result:
 
         if origin_route["route_name"] == destination_route["route_name"]:
             route_name = origin_route["route_name"]
-            st.success(f"Recommended line: {route_name}")
+            st.success(f"Take this bus: {route_name}")
 
-            if not live_df.empty and "line_id" in live_df.columns:
-                line_buses = live_df[live_df["line_id"] == route_name].copy()
+            best_bus = best_bus_for_route(
+                live_df,
+                route_name,
+                st.session_state.origin_point
+            )
 
-                if not line_buses.empty:
-                    line_buses["eta_minutes"] = line_buses.apply(
-                        lambda row: haversine_km(
-                            row["lat"],
-                            row["lon"],
-                            st.session_state.origin_point["lat"],
-                            st.session_state.origin_point["lon"],
-                        ) / 18 * 60,
-                        axis=1,
-                    )
+            if best_bus:
+                st.info(
+                    f"Nearest bus: {best_bus['plate_number']} | "
+                    f"ETA: {best_bus['eta_minutes']:.1f} min"
+                )
+            else:
+                st.info("No active bus currently on this line.")
 
-                    best_bus = line_buses.sort_values("eta_minutes").iloc[0]
-                    st.info(
-                        f"Nearest bus: {best_bus['plate_number']} | ETA: {best_bus['eta_minutes']:.1f} min"
-                    )
-                else:
-                    st.info("No active bus on this line.")
         else:
-            st.warning("Origin and destination are on different nearby routes.")
+            st.warning(
+                f"Take bus **{origin_route['route_name']}** first, then transfer to "
+                f"**{destination_route['route_name']}**."
+            )
+
+            first_bus = best_bus_for_route(
+                live_df,
+                origin_route["route_name"],
+                st.session_state.origin_point
+            )
+
+            if first_bus:
+                st.info(
+                    f"First bus: {first_bus['plate_number']} on "
+                    f"{origin_route['route_name']} | ETA: {first_bus['eta_minutes']:.1f} min"
+                )
 
 # -----------------------------
 # Floating footer
