@@ -1,7 +1,9 @@
 """Offline passenger route planner for Suly Transit."""
 
+import base64
 import json
 import math
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import folium
@@ -12,10 +14,23 @@ from streamlit_folium import st_folium
 
 st.set_page_config(page_title="Suly Transit", layout="wide")
 st.title("Suly Transit (Offline Planner)")
-st.caption("Select origin and destination on the map to get route advice.")
+st.caption("Click once for origin, click again for destination.")
+
+BASE_DIR = Path(__file__).resolve().parent
+ASSETS_DIR = BASE_DIR / "assets"
+ROUTES_FILE = ASSETS_DIR / "bus_lines.geojson"
+MAP_IMAGE = ASSETS_DIR / "sulaymaniyah_map.png"
 
 DEFAULT_CENTER = [35.56, 45.43]
 DEFAULT_ZOOM = 13
+MAX_WALK_KM = 0.70
+
+# Adjust these bounds until the PNG aligns correctly with your route GeoJSON.
+# Format: [[south_lat, west_lon], [north_lat, east_lon]]
+MAP_BOUNDS = [
+    [35.50, 45.35],
+    [35.62, 45.52],
+]
 
 ROUTE_COLORS: Dict[str, str] = {
     "Bakrajo_Bazar": "#e41a1c",
@@ -34,38 +49,56 @@ ROUTE_COLORS: Dict[str, str] = {
 }
 
 
+def image_to_data_url(image_path: Path) -> str:
+    encoded = base64.b64encode(image_path.read_bytes()).decode("utf-8")
+    return f"data:image/png;base64,{encoded}"
+
+
 @st.cache_data
 def load_routes() -> dict:
-    with open("assets/bus_lines.geojson", "r", encoding="utf-8") as f:
+    if not ROUTES_FILE.exists():
+        raise FileNotFoundError(f"Missing route file: {ROUTES_FILE}")
+    with open(ROUTES_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
 @st.cache_data
 def extract_route_points(routes_geojson: dict) -> pd.DataFrame:
     rows: List[dict] = []
+
     for feature in routes_geojson.get("features", []):
         route_name = feature.get("properties", {}).get("layer", "Unknown Route")
         geometry = feature.get("geometry", {})
-        if geometry.get("type") != "LineString":
+        geom_type = geometry.get("type")
+        coords = geometry.get("coordinates", [])
+
+        if geom_type == "LineString":
+            line_sets = [coords]
+        elif geom_type == "MultiLineString":
+            line_sets = coords
+        else:
             continue
 
-        for idx, coord in enumerate(geometry.get("coordinates", [])):
-            if len(coord) < 2:
-                continue
-            lon, lat = coord[0], coord[1]
-            rows.append(
-                {
-                    "route_name": route_name,
-                    "point_order": idx,
-                    "lat": lat,
-                    "lon": lon,
-                }
-            )
+        for line in line_sets:
+            for idx, coord in enumerate(line):
+                if not isinstance(coord, (list, tuple)) or len(coord) < 2:
+                    continue
+                lon, lat = coord[0], coord[1]
+                rows.append(
+                    {
+                        "route_name": route_name,
+                        "point_order": idx,
+                        "lat": lat,
+                        "lon": lon,
+                    }
+                )
 
     return pd.DataFrame(rows, columns=["route_name", "point_order", "lat", "lon"])
 
 
-def haversine_vectorized_km(lat1: float, lon1: float, lats2: np.ndarray, lons2: np.ndarray) -> np.ndarray:
+def haversine_vectorized_km(
+    lat1: float, lon1: float, lats2: np.ndarray, lons2: np.ndarray
+) -> np.ndarray:
     r = 6371.0
     lat1_rad = math.radians(lat1)
     lon1_rad = math.radians(lon1)
@@ -74,24 +107,37 @@ def haversine_vectorized_km(lat1: float, lon1: float, lats2: np.ndarray, lons2: 
 
     dlat = lats2_rad - lat1_rad
     dlon = lons2_rad - lon1_rad
-    a = np.sin(dlat / 2) ** 2 + np.cos(lat1_rad) * np.cos(lats2_rad) * np.sin(dlon / 2) ** 2
+    a = (
+        np.sin(dlat / 2) ** 2
+        + np.cos(lat1_rad) * np.cos(lats2_rad) * np.sin(dlon / 2) ** 2
+    )
     c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
     return r * c
 
 
-def nearest_route(point_lat: float, point_lon: float, route_points_df: pd.DataFrame) -> Optional[dict]:
+def nearest_route(
+    point_lat: float, point_lon: float, route_points_df: pd.DataFrame
+) -> Optional[dict]:
     if route_points_df.empty:
         return None
 
-    lats = pd.to_numeric(route_points_df["lat"], errors="coerce").to_numpy()
-    lons = pd.to_numeric(route_points_df["lon"], errors="coerce").to_numpy()
+    clean_df = route_points_df.copy()
+    clean_df["lat"] = pd.to_numeric(clean_df["lat"], errors="coerce")
+    clean_df["lon"] = pd.to_numeric(clean_df["lon"], errors="coerce")
+    clean_df = clean_df.dropna(subset=["lat", "lon"])
+
+    if clean_df.empty:
+        return None
+
+    lats = clean_df["lat"].to_numpy()
+    lons = clean_df["lon"].to_numpy()
     distances = haversine_vectorized_km(point_lat, point_lon, lats, lons)
 
     if distances.size == 0 or np.isnan(distances).all():
         return None
 
     idx = int(np.nanargmin(distances))
-    row = route_points_df.iloc[idx].to_dict()
+    row = clean_df.iloc[idx].to_dict()
     row["distance_km"] = float(distances[idx])
     return row
 
@@ -108,20 +154,35 @@ def build_map(routes_geojson: dict, highlight_routes: List[str]) -> folium.Map:
     m = folium.Map(
         location=st.session_state.map_center,
         zoom_start=st.session_state.map_zoom,
-        tiles="CartoDB positron",
+        min_zoom=11,
+        max_zoom=16,
+        tiles=None,
         control_scale=True,
         zoom_control=True,
+        max_bounds=True,
     )
+
+    if MAP_IMAGE.exists():
+        folium.raster_layers.ImageOverlay(
+            image=image_to_data_url(MAP_IMAGE),
+            bounds=MAP_BOUNDS,
+            opacity=1.0,
+            interactive=False,
+            cross_origin=False,
+            zindex=1,
+        ).add_to(m)
+    else:
+        st.warning(f"Map image not found: {MAP_IMAGE}")
 
     for feature in routes_geojson.get("features", []):
         route_name = feature.get("properties", {}).get("layer", "Bus Route")
         color = ROUTE_COLORS.get(route_name, "#3388ff")
 
         if highlight_routes:
-            opacity = 0.95 if route_name in highlight_routes else 0.15
+            opacity = 0.95 if route_name in highlight_routes else 0.18
             weight = 6 if route_name in highlight_routes else 2
         else:
-            opacity = 0.8
+            opacity = 0.85
             weight = 3
 
         folium.GeoJson(
@@ -143,7 +204,10 @@ def build_map(routes_geojson: dict, highlight_routes: List[str]) -> folium.Map:
 
     if st.session_state.destination_point:
         folium.Marker(
-            [st.session_state.destination_point["lat"], st.session_state.destination_point["lon"]],
+            [
+                st.session_state.destination_point["lat"],
+                st.session_state.destination_point["lon"],
+            ],
             tooltip="Destination",
             icon=folium.Icon(color="red"),
         ).add_to(m)
@@ -151,7 +215,9 @@ def build_map(routes_geojson: dict, highlight_routes: List[str]) -> folium.Map:
     return m
 
 
-def compute_trip_result(route_points_df: pd.DataFrame) -> Tuple[Optional[dict], List[str]]:
+def compute_trip_result(
+    route_points_df: pd.DataFrame,
+) -> Tuple[Optional[dict], List[str]]:
     if not st.session_state.origin_point or not st.session_state.destination_point:
         return None, []
 
@@ -167,30 +233,55 @@ def compute_trip_result(route_points_df: pd.DataFrame) -> Tuple[Optional[dict], 
     )
 
     if not origin_route or not destination_route:
-        return None, []
+        return {"error": "Could not find nearby routes."}, []
 
-    result = {"origin_route": origin_route, "destination_route": destination_route}
+    if origin_route["distance_km"] > MAX_WALK_KM:
+        return {
+            "error": (
+                f"Origin is too far from any route "
+                f"({origin_route['distance_km']:.2f} km)."
+            )
+        }, []
+
+    if destination_route["distance_km"] > MAX_WALK_KM:
+        return {
+            "error": (
+                f"Destination is too far from any route "
+                f"({destination_route['distance_km']:.2f} km)."
+            )
+        }, []
+
+    result = {
+        "origin_route": origin_route,
+        "destination_route": destination_route,
+    }
+
     if origin_route["route_name"] == destination_route["route_name"]:
         return result, [origin_route["route_name"]]
+
     return result, [origin_route["route_name"], destination_route["route_name"]]
 
 
-def process_click(map_data: Optional[dict]) -> None:
+def process_click(map_data: Optional[dict]) -> bool:
     if not map_data:
-        return
+        return False
+
+    changed = False
 
     if map_data.get("center"):
-        st.session_state.map_center = [map_data["center"]["lat"], map_data["center"]["lng"]]
+        center = map_data["center"]
+        st.session_state.map_center = [center["lat"], center["lng"]]
+
     if map_data.get("zoom"):
         st.session_state.map_zoom = map_data["zoom"]
 
     clicked = map_data.get("last_clicked")
     if not clicked:
-        return
+        return changed
 
     click_key = f"{round(clicked['lat'], 6)}_{round(clicked['lng'], 6)}"
     if click_key == st.session_state.last_click_key:
-        return
+        return changed
 
     st.session_state.last_click_key = click_key
     point = {"lat": clicked["lat"], "lon": clicked["lng"]}
@@ -203,27 +294,40 @@ def process_click(map_data: Optional[dict]) -> None:
         st.session_state.origin_point = point
         st.session_state.destination_point = None
 
-    st.rerun()
+    changed = True
+    return changed
 
 
 def render_sidebar() -> None:
     st.sidebar.header("Trip Controls")
+
     if st.sidebar.button("Reset Trip"):
         st.session_state.origin_point = None
         st.session_state.destination_point = None
         st.session_state.last_click_key = None
         st.rerun()
 
+    st.sidebar.markdown("### Map image")
+    st.sidebar.caption(str(MAP_IMAGE))
+
+    st.sidebar.markdown("### Bounds")
+    st.sidebar.code(str(MAP_BOUNDS))
+
     if st.session_state.origin_point is None:
-        st.sidebar.info("Click map to set origin.")
+        st.sidebar.info("Click the map to set origin.")
     elif st.session_state.destination_point is None:
-        st.sidebar.info("Click map again to set destination.")
+        st.sidebar.info("Click the map again to set destination.")
     else:
-        st.sidebar.success("Trip selected. Click map again to start a new trip.")
+        st.sidebar.success("Trip selected. Click again to start a new trip.")
 
 
 def render_result(trip_result: Optional[dict]) -> None:
     if not trip_result:
+        return
+
+    if "error" in trip_result:
+        st.subheader("Route Advice")
+        st.error(trip_result["error"])
         return
 
     origin_route = trip_result["origin_route"]
@@ -231,8 +335,10 @@ def render_result(trip_result: Optional[dict]) -> None:
 
     st.subheader("Route Advice")
     st.write(
-        f"Origin nearest: **{origin_route['route_name']}** | "
-        f"Destination nearest: **{destination_route['route_name']}**"
+        f"Origin nearest: **{origin_route['route_name']}** "
+        f"({origin_route['distance_km']:.2f} km) | "
+        f"Destination nearest: **{destination_route['route_name']}** "
+        f"({destination_route['distance_km']:.2f} km)"
     )
 
     if origin_route["route_name"] == destination_route["route_name"]:
@@ -244,41 +350,72 @@ def render_result(trip_result: Optional[dict]) -> None:
         )
 
 
+def render_footer() -> None:
+    footer_items = []
+
+    if st.session_state.origin_point:
+        footer_items.append(
+            "Origin: "
+            f"{st.session_state.origin_point['lat']:.5f}, "
+            f"{st.session_state.origin_point['lon']:.5f}"
+        )
+
+    if st.session_state.destination_point:
+        footer_items.append(
+            "Destination: "
+            f"{st.session_state.destination_point['lat']:.5f}, "
+            f"{st.session_state.destination_point['lon']:.5f}"
+        )
+
+    if footer_items:
+        st.caption(" | ".join(footer_items))
+
+
 def main() -> None:
     init_state()
     render_sidebar()
 
-    routes_geojson = load_routes()
+    try:
+        routes_geojson = load_routes()
+    except Exception as e:
+        st.error(f"Failed to load route file: {e}")
+        return
+
     route_points_df = extract_route_points(routes_geojson)
     if route_points_df.empty:
         st.error("No route points found in assets/bus_lines.geojson.")
         return
 
-    trip_result, highlight_routes = compute_trip_result(route_points_df)
-    map_obj = build_map(routes_geojson, highlight_routes)
+    # Build initial map without highlights first
+    map_obj = build_map(routes_geojson, [])
 
     map_data = st_folium(
         map_obj,
         height=700,
-        width="100%",
+        width=1200,
         returned_objects=["last_clicked", "center", "zoom"],
         key="passenger_map",
     )
 
-    process_click(map_data)
-    render_result(trip_result)
+    changed = process_click(map_data)
+    if changed:
+        st.rerun()
 
-    footer_items = []
-    if st.session_state.origin_point:
-        footer_items.append(
-            f"Origin: {st.session_state.origin_point['lat']:.5f}, {st.session_state.origin_point['lon']:.5f}"
+    trip_result, highlight_routes = compute_trip_result(route_points_df)
+
+    # Rebuild with highlighted routes once trip is known
+    if highlight_routes:
+        map_obj_highlighted = build_map(routes_geojson, highlight_routes)
+        st_folium(
+            map_obj_highlighted,
+            height=700,
+            width=1200,
+            returned_objects=[],
+            key="passenger_map_highlighted",
         )
-    if st.session_state.destination_point:
-        footer_items.append(
-            f"Destination: {st.session_state.destination_point['lat']:.5f}, {st.session_state.destination_point['lon']:.5f}"
-        )
-    if footer_items:
-        st.caption(" | ".join(footer_items))
+
+    render_result(trip_result)
+    render_footer()
 
 
 if __name__ == "__main__":
