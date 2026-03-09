@@ -17,7 +17,8 @@ st.title("Suly Transit (Offline Planner)")
 st.caption("Click once for origin, click again for destination.")
 
 BASE_DIR = Path(__file__).resolve().parent
-ASSETS_DIR = BASE_DIR / "assets"
+PROJECT_ROOT = BASE_DIR.parent
+ASSETS_DIR = PROJECT_ROOT / "assets"
 ROUTES_FILE = ASSETS_DIR / "bus_lines.geojson"
 MAP_IMAGE = ASSETS_DIR / "sulaymaniyah_map.png"
 
