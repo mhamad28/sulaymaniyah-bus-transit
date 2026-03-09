@@ -103,6 +103,10 @@ if "destination_point" not in st.session_state:
     st.session_state.destination_point = None
 if "pick_mode" not in st.session_state:
     st.session_state.pick_mode = "origin"
+if "map_center" not in st.session_state:
+    st.session_state.map_center = [35.56, 45.43]
+if "map_zoom" not in st.session_state:
+    st.session_state.map_zoom = 12
 
 # -----------------------------
 # Load data
@@ -165,8 +169,8 @@ if st.session_state.origin_point and st.session_state.destination_point:
 # Map
 # -----------------------------
 m = folium.Map(
-    location=[35.56, 45.43],
-    zoom_start=12,
+    location=st.session_state.map_center,
+    zoom_start=st.session_state.map_zoom,
     tiles="CartoDB positron",
     control_scale=True,
 )
@@ -223,7 +227,21 @@ if st.session_state.destination_point:
         icon=folium.Icon(color="red"),
     ).add_to(m)
 
-map_data = st_folium(m, height=650, width="stretch")
+map_data = st_folium(
+    m,
+    height=650,
+    width="stretch",
+    returned_objects=["last_clicked", "center", "zoom"],
+)
+
+if map_data:
+    if map_data.get("center"):
+        st.session_state.map_center = [
+            map_data["center"]["lat"],
+            map_data["center"]["lng"],
+        ]
+    if map_data.get("zoom"):
+        st.session_state.map_zoom = map_data["zoom"]
 
 clicked = map_data.get("last_clicked") if map_data else None
 if clicked:
@@ -269,7 +287,10 @@ if trip_result:
                 )
 
                 best_bus = line_buses.sort_values("eta_minutes").iloc[0]
-                st.info(f"Nearest active bus: {best_bus['plate_number']} | ETA: {best_bus['eta_minutes']:.1f} min")
+                st.info(
+                    f"Nearest active bus: {best_bus['plate_number']} | "
+                    f"ETA: {best_bus['eta_minutes']:.1f} min"
+                )
             else:
                 st.info("No active bus currently on this line.")
     else:
