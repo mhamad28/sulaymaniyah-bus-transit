@@ -2,9 +2,14 @@ import streamlit as st
 import pandas as pd
 import folium
 from streamlit_folium import st_folium
-from shared.db import get_supabase
+from supabase import create_client
 
 st.set_page_config(page_title="Sulaymaniyah Bus Transit", layout="wide")
+
+def get_supabase():
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
 
 supabase = get_supabase()
 
@@ -18,18 +23,11 @@ st.title("🚌 Sulaymaniyah Bus Transit")
 st.subheader("Passenger Portal")
 st.write("See the live route and active buses.")
 
-# Optional manual refresh button
-if st.button("Refresh live buses"):
-    st.cache_data.clear()
-
-# Fetch live buses from Supabase
 response = supabase.table("live_bus_data").select("*").execute()
 live_buses = response.data if response.data else []
 
-# Build map
 m = folium.Map(location=[35.5852, 45.4390], zoom_start=14)
 
-# Draw route line
 folium.PolyLine(
     df_route[["Y", "X"]].values,
     color="blue",
@@ -38,7 +36,6 @@ folium.PolyLine(
     tooltip="Bus Route"
 ).add_to(m)
 
-# Plot live buses
 if live_buses:
     for bus in live_buses:
         lat = bus.get("lat")
