@@ -24,8 +24,8 @@ def set_background(image_file: str) -> None:
     <style>
     .stApp {{
         background-image: linear-gradient(
-            rgba(10, 15, 30, 0.45),
-            rgba(10, 15, 30, 0.65)
+            rgba(10, 15, 30, 0.25),
+            rgba(10, 15, 30, 0.35)
         ), url("data:image/jpg;base64,{encoded}");
         background-size: cover;
         background-position: center;
@@ -37,18 +37,40 @@ def set_background(image_file: str) -> None:
     }}
 
     .block-container {{
-        background-color: rgba(0, 0, 0, 0.08);
-        padding: 1.5rem;
-        border-radius: 18px;
+        padding-top: 0.5rem;
+        padding-bottom: 0.5rem;
+        padding-left: 0.5rem;
+        padding-right: 0.5rem;
+        max-width: 100%;
     }}
 
-    .glass-card {{
-        background: rgba(10, 20, 35, 0.45);
-        border: 1px solid rgba(255,255,255,0.08);
-        backdrop-filter: blur(8px);
-        padding: 1rem 1.2rem;
+    /* Make the map feel dominant */
+    .map-shell {{
+        position: relative;
+        width: 100%;
+    }}
+
+    /* Floating cards */
+    .floating-card {{
+        background: rgba(10, 20, 35, 0.78);
+        border: 1px solid rgba(255,255,255,0.10);
+        backdrop-filter: blur(10px);
+        padding: 1rem 1rem;
         border-radius: 16px;
-        margin-bottom: 1rem;
+        color: white;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+    }}
+
+    /* Small visual improvement for metric text */
+    .small-note {{
+        font-size: 0.95rem;
+        opacity: 0.95;
+        line-height: 1.45;
+    }}
+
+    /* Hide default extra spacing in some places */
+    div[data-testid="stVerticalBlock"] > div:empty {{
+        display: none;
     }}
     </style>
     """
@@ -147,11 +169,12 @@ def build_passenger_map(
     destination_point=None,
     highlight_route=None,
     show_all_lines=True,
+    map_style="OpenStreetMap",
 ):
     m = folium.Map(
         location=[35.56, 45.43],
         zoom_start=12,
-        tiles="OpenStreetMap",
+        tiles=map_style,
         control_scale=True,
     )
 
@@ -162,7 +185,7 @@ def build_passenger_map(
             route_name = feature["properties"].get("layer", "Bus Route")
             color = ROUTE_COLORS.get(route_name, "#00bfff")
 
-            opacity = 0.35 if highlight_route and route_name != highlight_route else 0.8
+            opacity = 0.35 if highlight_route and route_name != highlight_route else 0.80
             weight = 3 if highlight_route and route_name != highlight_route else 5
 
             folium.GeoJson(
@@ -234,33 +257,17 @@ for key, value in defaults.items():
 
 
 # --------------------------------------------------
-# APP
+# LOAD DATA
 # --------------------------------------------------
-st.title("Suly Transit System")
-st.subheader("Static Passenger Map")
-
 routes_geojson = load_routes_geojson("assets/bus_lines.geojson")
 
-top1, top2 = st.columns([1, 5])
-with top1:
-    if st.button("🔄 Reset Points", width="stretch"):
-        st.session_state.origin_point = None
-        st.session_state.destination_point = None
-        st.rerun()
 
-with top2:
-    st.info(
-        "Click once on the map to set your origin. "
-        "Click a second time to set your destination."
-    )
-
-st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-
-show_all_lines = st.checkbox("Show all bus lines", value=True)
-
-highlight_route = None
+# --------------------------------------------------
+# LOGIC
+# --------------------------------------------------
 origin_route = None
 destination_route = None
+highlight_route = None
 
 if st.session_state.origin_point and st.session_state.destination_point:
     origin_route = nearest_route(
@@ -278,17 +285,82 @@ if st.session_state.origin_point and st.session_state.destination_point:
         if origin_route["route_name"] == destination_route["route_name"]:
             highlight_route = origin_route["route_name"]
 
+
+# --------------------------------------------------
+# TOP FLOATING LAYOUT
+# --------------------------------------------------
+top_left, top_center, top_right = st.columns([1.3, 3.2, 1.7], gap="small")
+
+with top_left:
+    st.markdown('<div class="floating-card">', unsafe_allow_html=True)
+    st.markdown("## Suly Transit")
+    st.markdown(
+        '<div class="small-note">Click once on the map for your <b>origin</b>. '
+        'Click a second time for your <b>destination</b>.</div>',
+        unsafe_allow_html=True,
+    )
+
+    if st.button("🔄 Reset points", width="stretch"):
+        st.session_state.origin_point = None
+        st.session_state.destination_point = None
+        st.rerun()
+
+    show_all_lines = st.checkbox("Show all bus lines", value=True)
+
+    map_style = st.selectbox(
+        "Map style",
+        ["OpenStreetMap", "CartoDB positron", "CartoDB dark_matter"],
+        index=0,
+    )
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with top_center:
+    st.markdown('<div class="floating-card">', unsafe_allow_html=True)
+    st.markdown("### City Bus Network")
+    st.markdown(
+        '<div class="small-note">This is a static passenger map. '
+        'It shows how the bus lines work in the city without live tracking.</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with top_right:
+    st.markdown('<div class="floating-card">', unsafe_allow_html=True)
+    st.markdown("### Selected Points")
+
+    if st.session_state.origin_point:
+        st.success(f"Origin set")
+        st.caption(st.session_state.origin_point["label"])
+    else:
+        st.info("Origin not selected")
+
+    if st.session_state.destination_point:
+        st.success("Destination set")
+        st.caption(st.session_state.destination_point["label"])
+    else:
+        st.info("Destination not selected")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# --------------------------------------------------
+# MAP
+# --------------------------------------------------
 passenger_map = build_passenger_map(
     routes_geojson=routes_geojson,
     origin_point=st.session_state.origin_point,
     destination_point=st.session_state.destination_point,
     highlight_route=highlight_route,
     show_all_lines=show_all_lines,
+    map_style=map_style,
 )
 
-map_data = st_folium(passenger_map, height=700, width="stretch")
-clicked = map_data.get("last_clicked") if map_data else None
+st.markdown('<div class="map-shell">', unsafe_allow_html=True)
+map_data = st_folium(passenger_map, height=720, width="stretch")
+st.markdown("</div>", unsafe_allow_html=True)
 
+clicked = map_data.get("last_clicked") if map_data else None
 if clicked:
     clicked_point = {
         "label": f"Selected point ({clicked['lat']:.5f}, {clicked['lng']:.5f})",
@@ -304,50 +376,59 @@ if clicked:
         st.session_state.destination_point = clicked_point
         st.rerun()
 
-st.markdown("</div>", unsafe_allow_html=True)
 
-if st.session_state.origin_point or st.session_state.destination_point:
-    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    st.subheader("Selected Points")
+# --------------------------------------------------
+# BOTTOM FLOATING RESULT AREA
+# --------------------------------------------------
+bottom_left, bottom_right = st.columns([2.4, 1.6], gap="small")
 
-    if st.session_state.origin_point:
-        st.write(f"**Origin:** {st.session_state.origin_point['label']}")
+with bottom_left:
+    st.markdown('<div class="floating-card">', unsafe_allow_html=True)
+    st.markdown("### Trip Guidance")
 
-    if st.session_state.destination_point:
-        st.write(f"**Destination:** {st.session_state.destination_point['label']}")
+    if st.session_state.origin_point and st.session_state.destination_point:
+        if origin_route:
+            st.write(
+                f"Nearest line to origin: **{origin_route['route_name']}** "
+                f"({origin_route['distance_km']:.2f} km away)"
+            )
+
+        if destination_route:
+            st.write(
+                f"Nearest line to destination: **{destination_route['route_name']}** "
+                f"({destination_route['distance_km']:.2f} km away)"
+            )
+
+        if origin_route and destination_route:
+            if origin_route["route_name"] == destination_route["route_name"]:
+                st.success(
+                    f"Take **{origin_route['route_name']}** from your origin area toward your destination."
+                )
+                st.info(
+                    "Demo logic: walk to the nearest part of the highlighted line, "
+                    "ride that line, then walk to your destination."
+                )
+            else:
+                st.warning(
+                    "Your origin and destination are closest to different lines. "
+                    "This likely needs a transfer. Transfer logic can be added later."
+                )
+    else:
+        st.info("Choose two points on the map to get trip guidance.")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-if st.session_state.origin_point and st.session_state.destination_point:
-    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    st.subheader("Trip Guidance")
+with bottom_right:
+    st.markdown('<div class="floating-card">', unsafe_allow_html=True)
+    st.markdown("### How to use")
 
-    if origin_route:
-        st.write(
-            f"Nearest line to origin: **{origin_route['route_name']}** "
-            f"({origin_route['distance_km']:.2f} km away)"
-        )
-
-    if destination_route:
-        st.write(
-            f"Nearest line to destination: **{destination_route['route_name']}** "
-            f"({destination_route['distance_km']:.2f} km away)"
-        )
-
-    if origin_route and destination_route:
-        if origin_route["route_name"] == destination_route["route_name"]:
-            st.success(
-                f"Take **{origin_route['route_name']}** from your origin area "
-                f"toward your destination."
-            )
-            st.info(
-                "Demo logic: walk to the nearest part of the highlighted line, "
-                "take that bus, then walk from the line to your destination."
-            )
-        else:
-            st.warning(
-                "Your origin and destination are closest to different lines. "
-                "This likely needs a transfer. Transfer logic can be added in the next version."
-            )
+    st.markdown(
+        """
+1. Open the map  
+2. Click your start point  
+3. Click your destination  
+4. Read the suggested bus line  
+        """
+    )
 
     st.markdown("</div>", unsafe_allow_html=True)
