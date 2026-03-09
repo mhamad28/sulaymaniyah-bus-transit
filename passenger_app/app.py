@@ -3,11 +3,84 @@ import pandas as pd
 import json
 import math
 import folium
-from folium.plugins import Fullscreen
 from streamlit_folium import st_folium
 from supabase import create_client
 
-st.set_page_config(page_title="Suly Transit", layout="wide")
+st.set_page_config(
+    page_title="Suly Transit",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+st.markdown("""
+<style>
+html, body, [data-testid="stAppViewContainer"] {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+}
+
+[data-testid="stHeader"] {
+    background: rgba(0, 0, 0, 0);
+}
+
+[data-testid="stAppViewContainer"] > .main {
+    padding: 0 !important;
+}
+
+.block-container {
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: 100% !important;
+}
+
+.top-bar {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    right: 12px;
+    z-index: 9999;
+    background: rgba(10, 15, 25, 0.80);
+    border-radius: 14px;
+    padding: 10px 14px 6px 14px;
+    backdrop-filter: blur(6px);
+}
+
+.map-caption {
+    position: fixed;
+    bottom: 14px;
+    left: 14px;
+    z-index: 9999;
+    background: rgba(10, 15, 25, 0.75);
+    color: white;
+    padding: 10px 14px;
+    border-radius: 12px;
+    font-size: 14px;
+}
+
+.result-box {
+    position: fixed;
+    top: 96px;
+    right: 14px;
+    width: 320px;
+    z-index: 9999;
+    background: rgba(10, 15, 25, 0.82);
+    color: white;
+    padding: 14px;
+    border-radius: 14px;
+    backdrop-filter: blur(6px);
+}
+
+div[data-testid="stHorizontalBlock"] > div {
+    background: transparent !important;
+}
+
+iframe {
+    border-radius: 0 !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
 # -----------------------------
 # Supabase
@@ -76,7 +149,7 @@ def get_live_buses():
     return pd.DataFrame(columns=["plate_number", "driver_name", "line_id", "lat", "lon", "last_ping"])
 
 # -----------------------------
-# Colors
+# Route colors
 # -----------------------------
 ROUTE_COLORS = {
     "Bakrajo_Bazar": "#e41a1c",
@@ -106,7 +179,7 @@ if "pick_mode" not in st.session_state:
 if "map_center" not in st.session_state:
     st.session_state.map_center = [35.56, 45.43]
 if "map_zoom" not in st.session_state:
-    st.session_state.map_zoom = 12
+    st.session_state.map_zoom = 13
 
 # -----------------------------
 # Load data
@@ -116,31 +189,7 @@ route_points_df = extract_route_points(routes_geojson)
 live_df = get_live_buses()
 
 # -----------------------------
-# UI
-# -----------------------------
-st.title("Suly Transit")
-
-c1, c2, c3 = st.columns(3)
-
-with c1:
-    if st.button("Pick Origin"):
-        st.session_state.pick_mode = "origin"
-
-with c2:
-    if st.button("Pick Destination"):
-        st.session_state.pick_mode = "destination"
-
-with c3:
-    if st.button("Clear"):
-        st.session_state.origin_point = None
-        st.session_state.destination_point = None
-        st.session_state.pick_mode = "origin"
-        st.rerun()
-
-st.caption(f"Current selection mode: {st.session_state.pick_mode}")
-
-# -----------------------------
-# Route suggestion logic
+# Compute result
 # -----------------------------
 highlight_route = None
 trip_result = None
@@ -166,27 +215,56 @@ if st.session_state.origin_point and st.session_state.destination_point:
         highlight_route = origin_route["route_name"]
 
 # -----------------------------
-# Map
+# Top controls
+# -----------------------------
+st.markdown('<div class="top-bar">', unsafe_allow_html=True)
+
+st.markdown("### Suly Transit")
+
+c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
+
+with c1:
+    if st.button("Pick Origin", use_container_width=True):
+        st.session_state.pick_mode = "origin"
+
+with c2:
+    if st.button("Pick Destination", use_container_width=True):
+        st.session_state.pick_mode = "destination"
+
+with c3:
+    if st.button("Clear", use_container_width=True):
+        st.session_state.origin_point = None
+        st.session_state.destination_point = None
+        st.session_state.pick_mode = "origin"
+        st.rerun()
+
+with c4:
+    st.write(f"Mode: **{st.session_state.pick_mode}**")
+
+st.markdown('</div>', unsafe_allow_html=True)
+
+# -----------------------------
+# Build map
 # -----------------------------
 m = folium.Map(
     location=st.session_state.map_center,
     zoom_start=st.session_state.map_zoom,
     tiles="CartoDB positron",
     control_scale=True,
+    zoom_control=True,
 )
 
-Fullscreen().add_to(m)
-
+# Draw routes
 for feature in routes_geojson["features"]:
     route_name = feature["properties"].get("layer", "Bus Route")
     color = ROUTE_COLORS.get(route_name, "#3388ff")
 
     if highlight_route:
         opacity = 0.95 if route_name == highlight_route else 0.20
-        weight = 6 if route_name == highlight_route else 3
+        weight = 6 if route_name == highlight_route else 2
     else:
-        opacity = 0.80
-        weight = 4
+        opacity = 0.75
+        weight = 3
 
     folium.GeoJson(
         feature,
@@ -198,6 +276,7 @@ for feature in routes_geojson["features"]:
         },
     ).add_to(m)
 
+# Live buses
 if not live_df.empty:
     for _, row in live_df.iterrows():
         if pd.notna(row["lat"]) and pd.notna(row["lon"]):
@@ -206,13 +285,15 @@ if not live_df.empty:
                 radius=6,
                 color="orange",
                 fill=True,
-                fill_opacity=0.9,
+                fill_color="orange",
+                fill_opacity=0.95,
                 popup=(
-                    f"Bus: {row['plate_number']}<br>"
+                    f"Bus: {row.get('plate_number', 'Unknown')}<br>"
                     f"Line: {row.get('line_id', 'Unknown')}"
                 ),
             ).add_to(m)
 
+# Origin marker
 if st.session_state.origin_point:
     folium.Marker(
         [st.session_state.origin_point["lat"], st.session_state.origin_point["lon"]],
@@ -220,6 +301,7 @@ if st.session_state.origin_point:
         icon=folium.Icon(color="green"),
     ).add_to(m)
 
+# Destination marker
 if st.session_state.destination_point:
     folium.Marker(
         [st.session_state.destination_point["lat"], st.session_state.destination_point["lon"]],
@@ -227,9 +309,12 @@ if st.session_state.destination_point:
         icon=folium.Icon(color="red"),
     ).add_to(m)
 
+# -----------------------------
+# Full-page map
+# -----------------------------
 map_data = st_folium(
     m,
-    height=650,
+    height=900,
     width="stretch",
     returned_objects=["last_clicked", "center", "zoom"],
 )
@@ -257,20 +342,28 @@ if clicked:
     st.rerun()
 
 # -----------------------------
-# Result
+# Floating result box
 # -----------------------------
 if trip_result:
-    st.subheader("Suggested Route")
-
     origin_route = trip_result["origin_route"]
     destination_route = trip_result["destination_route"]
 
-    st.write(f"Nearest to origin: **{origin_route['route_name']}**")
-    st.write(f"Nearest to destination: **{destination_route['route_name']}**")
+    result_html = f"""
+    <div class="result-box">
+        <h4 style="margin-top:0;">Suggested Route</h4>
+        <div style="font-size:14px; margin-bottom:8px;">
+            Origin nearest: <b>{origin_route['route_name']}</b><br>
+            Destination nearest: <b>{destination_route['route_name']}</b>
+        </div>
+    """
 
     if origin_route["route_name"] == destination_route["route_name"]:
         route_name = origin_route["route_name"]
-        st.success(f"Recommended line: {route_name}")
+        result_html += f"""
+        <div style="padding:10px; background:#113b22; border-radius:10px; margin-top:8px;">
+            Recommended line: <b>{route_name}</b>
+        </div>
+        """
 
         if not live_df.empty and "line_id" in live_df.columns:
             line_buses = live_df[live_df["line_id"] == route_name].copy()
@@ -287,11 +380,45 @@ if trip_result:
                 )
 
                 best_bus = line_buses.sort_values("eta_minutes").iloc[0]
-                st.info(
-                    f"Nearest active bus: {best_bus['plate_number']} | "
-                    f"ETA: {best_bus['eta_minutes']:.1f} min"
-                )
+                result_html += f"""
+                <div style="padding:10px; background:#12304a; border-radius:10px; margin-top:8px;">
+                    Nearest bus: <b>{best_bus['plate_number']}</b><br>
+                    ETA: <b>{best_bus['eta_minutes']:.1f} min</b>
+                </div>
+                """
             else:
-                st.info("No active bus currently on this line.")
+                result_html += """
+                <div style="padding:10px; background:#2e2e2e; border-radius:10px; margin-top:8px;">
+                    No active bus on this line.
+                </div>
+                """
     else:
-        st.warning("Origin and destination are on different nearby routes.")
+        result_html += """
+        <div style="padding:10px; background:#5c3a12; border-radius:10px; margin-top:8px;">
+            Origin and destination are on different nearby routes.
+        </div>
+        """
+
+    result_html += "</div>"
+    st.markdown(result_html, unsafe_allow_html=True)
+
+# -----------------------------
+# Floating footer info
+# -----------------------------
+footer_text = []
+if st.session_state.origin_point:
+    footer_text.append(
+        f"Origin: {st.session_state.origin_point['lat']:.5f}, {st.session_state.origin_point['lon']:.5f}"
+    )
+if st.session_state.destination_point:
+    footer_text.append(
+        f"Destination: {st.session_state.destination_point['lat']:.5f}, {st.session_state.destination_point['lon']:.5f}"
+    )
+if not live_df.empty:
+    footer_text.append(f"Active buses: {len(live_df)}")
+
+if footer_text:
+    st.markdown(
+        f'<div class="map-caption">{" | ".join(footer_text)}</div>',
+        unsafe_allow_html=True
+    )
