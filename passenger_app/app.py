@@ -1,89 +1,23 @@
-import streamlit as st
-import folium
-from streamlit_folium import st_folium
+"""Offline passenger route planner for Suly Transit."""
+
 import json
 import math
-import base64
+from typing import Dict, List, Optional, Tuple
+
+import folium
+import numpy as np
 import pandas as pd
+import streamlit as st
+from streamlit_folium import st_folium
 
+st.set_page_config(page_title="Suly Transit", layout="wide")
+st.title("Suly Transit (Offline Planner)")
+st.caption("Select origin and destination on the map to get route advice.")
 
-# --------------------------------------------------
-# PAGE CONFIG
-# --------------------------------------------------
-st.set_page_config(page_title="Suly Transit Map", layout="wide")
+DEFAULT_CENTER = [35.56, 45.43]
+DEFAULT_ZOOM = 13
 
-
-# --------------------------------------------------
-# BACKGROUND
-# --------------------------------------------------
-def set_background(image_file: str) -> None:
-    with open(image_file, "rb") as img:
-        encoded = base64.b64encode(img.read()).decode()
-
-    page_bg = f"""
-    <style>
-    .stApp {{
-        background-image: linear-gradient(
-            rgba(10, 15, 30, 0.25),
-            rgba(10, 15, 30, 0.35)
-        ), url("data:image/jpg;base64,{encoded}");
-        background-size: cover;
-        background-position: center;
-        background-attachment: fixed;
-    }}
-
-    [data-testid="stHeader"] {{
-        background: rgba(0, 0, 0, 0);
-    }}
-
-    .block-container {{
-        padding-top: 0.5rem;
-        padding-bottom: 0.5rem;
-        padding-left: 0.5rem;
-        padding-right: 0.5rem;
-        max-width: 100%;
-    }}
-
-    /* Make the map feel dominant */
-    .map-shell {{
-        position: relative;
-        width: 100%;
-    }}
-
-    /* Floating cards */
-    .floating-card {{
-        background: rgba(10, 20, 35, 0.78);
-        border: 1px solid rgba(255,255,255,0.10);
-        backdrop-filter: blur(10px);
-        padding: 1rem 1rem;
-        border-radius: 16px;
-        color: white;
-        box-shadow: 0 8px 24px rgba(0,0,0,0.25);
-    }}
-
-    /* Small visual improvement for metric text */
-    .small-note {{
-        font-size: 0.95rem;
-        opacity: 0.95;
-        line-height: 1.45;
-    }}
-
-    /* Hide default extra spacing in some places */
-    div[data-testid="stVerticalBlock"] > div:empty {{
-        display: none;
-    }}
-    </style>
-    """
-    st.markdown(page_bg, unsafe_allow_html=True)
-
-
-set_background("assets/suli_bg.jpg")
-
-
-# --------------------------------------------------
-# ROUTE COLORS
-# --------------------------------------------------
-ROUTE_COLORS = {
+ROUTE_COLORS: Dict[str, str] = {
     "Bakrajo_Bazar": "#e41a1c",
     "Chwarchra_Bazar": "#377eb8",
     "FarmanBaran_Bazar": "#4daf4a",
@@ -100,335 +34,252 @@ ROUTE_COLORS = {
 }
 
 
-# --------------------------------------------------
-# HELPERS
-# --------------------------------------------------
-def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    r = 6371.0
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-
-    a = (
-        math.sin(dlat / 2) ** 2
-        + math.cos(math.radians(lat1))
-        * math.cos(math.radians(lat2))
-        * math.sin(dlon / 2) ** 2
-    )
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return r * c
-
-
 @st.cache_data
-def load_routes_geojson(path="assets/bus_lines.geojson"):
-    with open(path, "r", encoding="utf-8") as f:
+def load_routes() -> dict:
+    with open("assets/bus_lines.geojson", "r", encoding="utf-8") as f:
         return json.load(f)
 
 
 @st.cache_data
-def extract_route_points(routes_geojson):
-    rows = []
-
-    for feature in routes_geojson["features"]:
-        route_name = feature["properties"].get("layer", "Unknown Route")
+def extract_route_points(routes_geojson: dict) -> pd.DataFrame:
+    rows: List[dict] = []
+    for feature in routes_geojson.get("features", []):
+        route_name = feature.get("properties", {}).get("layer", "Unknown Route")
         geometry = feature.get("geometry", {})
-        coords = geometry.get("coordinates", [])
+        if geometry.get("type") != "LineString":
+            continue
 
-        if geometry.get("type") == "LineString":
-            for idx, coord in enumerate(coords):
-                lon, lat = coord[0], coord[1]
-                rows.append(
-                    {
-                        "route_name": route_name,
-                        "point_order": idx,
-                        "lat": lat,
-                        "lon": lon,
-                    }
-                )
+        for idx, coord in enumerate(geometry.get("coordinates", [])):
+            if len(coord) < 2:
+                continue
+            lon, lat = coord[0], coord[1]
+            rows.append(
+                {
+                    "route_name": route_name,
+                    "point_order": idx,
+                    "lat": lat,
+                    "lon": lon,
+                }
+            )
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=["route_name", "point_order", "lat", "lon"])
 
 
-def nearest_route(point_lat: float, point_lon: float, routes_geojson):
-    route_points_df = extract_route_points(routes_geojson).copy()
+def haversine_vectorized_km(lat1: float, lon1: float, lats2: np.ndarray, lons2: np.ndarray) -> np.ndarray:
+    r = 6371.0
+    lat1_rad = math.radians(lat1)
+    lon1_rad = math.radians(lon1)
+    lats2_rad = np.radians(lats2)
+    lons2_rad = np.radians(lons2)
 
+    dlat = lats2_rad - lat1_rad
+    dlon = lons2_rad - lon1_rad
+    a = np.sin(dlat / 2) ** 2 + np.cos(lat1_rad) * np.cos(lats2_rad) * np.sin(dlon / 2) ** 2
+    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
+    return r * c
+
+
+def nearest_route(point_lat: float, point_lon: float, route_points_df: pd.DataFrame) -> Optional[dict]:
     if route_points_df.empty:
         return None
 
-    route_points_df["distance_km"] = route_points_df.apply(
-        lambda row: haversine_km(point_lat, point_lon, row["lat"], row["lon"]),
-        axis=1,
-    )
+    lats = pd.to_numeric(route_points_df["lat"], errors="coerce").to_numpy()
+    lons = pd.to_numeric(route_points_df["lon"], errors="coerce").to_numpy()
+    distances = haversine_vectorized_km(point_lat, point_lon, lats, lons)
 
-    nearest = route_points_df.sort_values("distance_km").iloc[0]
-    return nearest.to_dict()
+    if distances.size == 0 or np.isnan(distances).all():
+        return None
+
+    idx = int(np.nanargmin(distances))
+    row = route_points_df.iloc[idx].to_dict()
+    row["distance_km"] = float(distances[idx])
+    return row
 
 
-def build_passenger_map(
-    routes_geojson,
-    origin_point=None,
-    destination_point=None,
-    highlight_route=None,
-    show_all_lines=True,
-    map_style="OpenStreetMap",
-):
+def init_state() -> None:
+    st.session_state.setdefault("origin_point", None)
+    st.session_state.setdefault("destination_point", None)
+    st.session_state.setdefault("last_click_key", None)
+    st.session_state.setdefault("map_center", DEFAULT_CENTER)
+    st.session_state.setdefault("map_zoom", DEFAULT_ZOOM)
+
+
+def build_map(routes_geojson: dict, highlight_routes: List[str]) -> folium.Map:
     m = folium.Map(
-        location=[35.56, 45.43],
-        zoom_start=12,
-        tiles=map_style,
+        location=st.session_state.map_center,
+        zoom_start=st.session_state.map_zoom,
+        tiles="CartoDB positron",
         control_scale=True,
+        zoom_control=True,
     )
 
-    if show_all_lines:
-        all_routes_layer = folium.FeatureGroup(name="All Bus Lines", show=True)
+    for feature in routes_geojson.get("features", []):
+        route_name = feature.get("properties", {}).get("layer", "Bus Route")
+        color = ROUTE_COLORS.get(route_name, "#3388ff")
 
-        for feature in routes_geojson["features"]:
-            route_name = feature["properties"].get("layer", "Bus Route")
-            color = ROUTE_COLORS.get(route_name, "#00bfff")
+        if highlight_routes:
+            opacity = 0.95 if route_name in highlight_routes else 0.15
+            weight = 6 if route_name in highlight_routes else 2
+        else:
+            opacity = 0.8
+            weight = 3
 
-            opacity = 0.35 if highlight_route and route_name != highlight_route else 0.80
-            weight = 3 if highlight_route and route_name != highlight_route else 5
+        folium.GeoJson(
+            feature,
+            tooltip=route_name,
+            style_function=lambda _, color=color, weight=weight, opacity=opacity: {
+                "color": color,
+                "weight": weight,
+                "opacity": opacity,
+            },
+        ).add_to(m)
 
-            folium.GeoJson(
-                feature,
-                tooltip=route_name,
-                style_function=lambda x, color=color, weight=weight, opacity=opacity: {
-                    "color": color,
-                    "weight": weight,
-                    "opacity": opacity,
-                },
-            ).add_to(all_routes_layer)
-
-        all_routes_layer.add_to(m)
-
-    if highlight_route:
-        recommended_layer = folium.FeatureGroup(name="Recommended Route", show=True)
-
-        for feature in routes_geojson["features"]:
-            route_name = feature["properties"].get("layer", "Bus Route")
-            if route_name == highlight_route:
-                color = ROUTE_COLORS.get(route_name, "#00bfff")
-
-                folium.GeoJson(
-                    feature,
-                    tooltip=f"Recommended: {route_name}",
-                    style_function=lambda x, color=color: {
-                        "color": color,
-                        "weight": 7,
-                        "opacity": 1.0,
-                    },
-                ).add_to(recommended_layer)
-
-        recommended_layer.add_to(m)
-
-    points_layer = folium.FeatureGroup(name="Points", show=True)
-
-    if origin_point:
+    if st.session_state.origin_point:
         folium.Marker(
-            location=[origin_point["lat"], origin_point["lon"]],
-            popup=origin_point.get("label", "Origin"),
+            [st.session_state.origin_point["lat"], st.session_state.origin_point["lon"]],
             tooltip="Origin",
-            icon=folium.Icon(color="green", icon="play"),
-        ).add_to(points_layer)
+            icon=folium.Icon(color="green"),
+        ).add_to(m)
 
-    if destination_point:
+    if st.session_state.destination_point:
         folium.Marker(
-            location=[destination_point["lat"], destination_point["lon"]],
-            popup=destination_point.get("label", "Destination"),
+            [st.session_state.destination_point["lat"], st.session_state.destination_point["lon"]],
             tooltip="Destination",
-            icon=folium.Icon(color="red", icon="flag"),
-        ).add_to(points_layer)
-
-    points_layer.add_to(m)
-    folium.LayerControl(collapsed=False).add_to(m)
+            icon=folium.Icon(color="red"),
+        ).add_to(m)
 
     return m
 
 
-# --------------------------------------------------
-# SESSION STATE
-# --------------------------------------------------
-defaults = {
-    "origin_point": None,
-    "destination_point": None,
-}
-for key, value in defaults.items():
-    if key not in st.session_state:
-        st.session_state[key] = value
+def compute_trip_result(route_points_df: pd.DataFrame) -> Tuple[Optional[dict], List[str]]:
+    if not st.session_state.origin_point or not st.session_state.destination_point:
+        return None, []
 
-
-# --------------------------------------------------
-# LOAD DATA
-# --------------------------------------------------
-routes_geojson = load_routes_geojson("assets/bus_lines.geojson")
-
-
-# --------------------------------------------------
-# LOGIC
-# --------------------------------------------------
-origin_route = None
-destination_route = None
-highlight_route = None
-
-if st.session_state.origin_point and st.session_state.destination_point:
     origin_route = nearest_route(
         st.session_state.origin_point["lat"],
         st.session_state.origin_point["lon"],
-        routes_geojson,
+        route_points_df,
     )
     destination_route = nearest_route(
         st.session_state.destination_point["lat"],
         st.session_state.destination_point["lon"],
-        routes_geojson,
+        route_points_df,
     )
 
-    if origin_route and destination_route:
-        if origin_route["route_name"] == destination_route["route_name"]:
-            highlight_route = origin_route["route_name"]
+    if not origin_route or not destination_route:
+        return None, []
+
+    result = {"origin_route": origin_route, "destination_route": destination_route}
+    if origin_route["route_name"] == destination_route["route_name"]:
+        return result, [origin_route["route_name"]]
+    return result, [origin_route["route_name"], destination_route["route_name"]]
 
 
-# --------------------------------------------------
-# TOP FLOATING LAYOUT
-# --------------------------------------------------
-top_left, top_center, top_right = st.columns([1.3, 3.2, 1.7], gap="small")
+def process_click(map_data: Optional[dict]) -> None:
+    if not map_data:
+        return
 
-with top_left:
-    st.markdown('<div class="floating-card">', unsafe_allow_html=True)
-    st.markdown("## Suly Transit")
-    st.markdown(
-        '<div class="small-note">Click once on the map for your <b>origin</b>. '
-        'Click a second time for your <b>destination</b>.</div>',
-        unsafe_allow_html=True,
-    )
+    if map_data.get("center"):
+        st.session_state.map_center = [map_data["center"]["lat"], map_data["center"]["lng"]]
+    if map_data.get("zoom"):
+        st.session_state.map_zoom = map_data["zoom"]
 
-    if st.button("🔄 Reset points", width="stretch"):
-        st.session_state.origin_point = None
-        st.session_state.destination_point = None
-        st.rerun()
+    clicked = map_data.get("last_clicked")
+    if not clicked:
+        return
 
-    show_all_lines = st.checkbox("Show all bus lines", value=True)
+    click_key = f"{round(clicked['lat'], 6)}_{round(clicked['lng'], 6)}"
+    if click_key == st.session_state.last_click_key:
+        return
 
-    map_style = st.selectbox(
-        "Map style",
-        ["OpenStreetMap", "CartoDB positron", "CartoDB dark_matter"],
-        index=0,
-    )
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-with top_center:
-    st.markdown('<div class="floating-card">', unsafe_allow_html=True)
-    st.markdown("### City Bus Network")
-    st.markdown(
-        '<div class="small-note">This is a static passenger map. '
-        'It shows how the bus lines work in the city without live tracking.</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
-
-with top_right:
-    st.markdown('<div class="floating-card">', unsafe_allow_html=True)
-    st.markdown("### Selected Points")
-
-    if st.session_state.origin_point:
-        st.success(f"Origin set")
-        st.caption(st.session_state.origin_point["label"])
-    else:
-        st.info("Origin not selected")
-
-    if st.session_state.destination_point:
-        st.success("Destination set")
-        st.caption(st.session_state.destination_point["label"])
-    else:
-        st.info("Destination not selected")
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-# --------------------------------------------------
-# MAP
-# --------------------------------------------------
-passenger_map = build_passenger_map(
-    routes_geojson=routes_geojson,
-    origin_point=st.session_state.origin_point,
-    destination_point=st.session_state.destination_point,
-    highlight_route=highlight_route,
-    show_all_lines=show_all_lines,
-    map_style=map_style,
-)
-
-st.markdown('<div class="map-shell">', unsafe_allow_html=True)
-map_data = st_folium(passenger_map, height=720, width="stretch")
-st.markdown("</div>", unsafe_allow_html=True)
-
-clicked = map_data.get("last_clicked") if map_data else None
-if clicked:
-    clicked_point = {
-        "label": f"Selected point ({clicked['lat']:.5f}, {clicked['lng']:.5f})",
-        "lat": clicked["lat"],
-        "lon": clicked["lng"],
-    }
+    st.session_state.last_click_key = click_key
+    point = {"lat": clicked["lat"], "lon": clicked["lng"]}
 
     if st.session_state.origin_point is None:
-        st.session_state.origin_point = clicked_point
-        st.rerun()
-
+        st.session_state.origin_point = point
     elif st.session_state.destination_point is None:
-        st.session_state.destination_point = clicked_point
+        st.session_state.destination_point = point
+    else:
+        st.session_state.origin_point = point
+        st.session_state.destination_point = None
+
+    st.rerun()
+
+
+def render_sidebar() -> None:
+    st.sidebar.header("Trip Controls")
+    if st.sidebar.button("Reset Trip"):
+        st.session_state.origin_point = None
+        st.session_state.destination_point = None
+        st.session_state.last_click_key = None
         st.rerun()
 
-
-# --------------------------------------------------
-# BOTTOM FLOATING RESULT AREA
-# --------------------------------------------------
-bottom_left, bottom_right = st.columns([2.4, 1.6], gap="small")
-
-with bottom_left:
-    st.markdown('<div class="floating-card">', unsafe_allow_html=True)
-    st.markdown("### Trip Guidance")
-
-    if st.session_state.origin_point and st.session_state.destination_point:
-        if origin_route:
-            st.write(
-                f"Nearest line to origin: **{origin_route['route_name']}** "
-                f"({origin_route['distance_km']:.2f} km away)"
-            )
-
-        if destination_route:
-            st.write(
-                f"Nearest line to destination: **{destination_route['route_name']}** "
-                f"({destination_route['distance_km']:.2f} km away)"
-            )
-
-        if origin_route and destination_route:
-            if origin_route["route_name"] == destination_route["route_name"]:
-                st.success(
-                    f"Take **{origin_route['route_name']}** from your origin area toward your destination."
-                )
-                st.info(
-                    "Demo logic: walk to the nearest part of the highlighted line, "
-                    "ride that line, then walk to your destination."
-                )
-            else:
-                st.warning(
-                    "Your origin and destination are closest to different lines. "
-                    "This likely needs a transfer. Transfer logic can be added later."
-                )
+    if st.session_state.origin_point is None:
+        st.sidebar.info("Click map to set origin.")
+    elif st.session_state.destination_point is None:
+        st.sidebar.info("Click map again to set destination.")
     else:
-        st.info("Choose two points on the map to get trip guidance.")
+        st.sidebar.success("Trip selected. Click map again to start a new trip.")
 
-    st.markdown("</div>", unsafe_allow_html=True)
 
-with bottom_right:
-    st.markdown('<div class="floating-card">', unsafe_allow_html=True)
-    st.markdown("### How to use")
+def render_result(trip_result: Optional[dict]) -> None:
+    if not trip_result:
+        return
 
-    st.markdown(
-        """
-1. Open the map  
-2. Click your start point  
-3. Click your destination  
-4. Read the suggested bus line  
-        """
+    origin_route = trip_result["origin_route"]
+    destination_route = trip_result["destination_route"]
+
+    st.subheader("Route Advice")
+    st.write(
+        f"Origin nearest: **{origin_route['route_name']}** | "
+        f"Destination nearest: **{destination_route['route_name']}**"
     )
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    if origin_route["route_name"] == destination_route["route_name"]:
+        st.success(f"Take this bus line: {origin_route['route_name']}")
+    else:
+        st.warning(
+            f"Take **{origin_route['route_name']}** first, then transfer to "
+            f"**{destination_route['route_name']}**."
+        )
+
+
+def main() -> None:
+    init_state()
+    render_sidebar()
+
+    routes_geojson = load_routes()
+    route_points_df = extract_route_points(routes_geojson)
+    if route_points_df.empty:
+        st.error("No route points found in assets/bus_lines.geojson.")
+        return
+
+    trip_result, highlight_routes = compute_trip_result(route_points_df)
+    map_obj = build_map(routes_geojson, highlight_routes)
+
+    map_data = st_folium(
+        map_obj,
+        height=700,
+        width="100%",
+        returned_objects=["last_clicked", "center", "zoom"],
+        key="passenger_map",
+    )
+
+    process_click(map_data)
+    render_result(trip_result)
+
+    footer_items = []
+    if st.session_state.origin_point:
+        footer_items.append(
+            f"Origin: {st.session_state.origin_point['lat']:.5f}, {st.session_state.origin_point['lon']:.5f}"
+        )
+    if st.session_state.destination_point:
+        footer_items.append(
+            f"Destination: {st.session_state.destination_point['lat']:.5f}, {st.session_state.destination_point['lon']:.5f}"
+        )
+    if footer_items:
+        st.caption(" | ".join(footer_items))
+
+
+if __name__ == "__main__":
+    main()
