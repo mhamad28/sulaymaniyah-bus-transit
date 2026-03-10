@@ -200,765 +200,477 @@ def build_map_html(routes_geojson: dict, highlight: List[str],
                    live_buses: list,
                    supabase_url: str, supabase_key: str) -> str:
 
-    geojson_str   = json.dumps(routes_geojson)
-    colors_str    = json.dumps(ROUTE_COLORS)
-    highlight_str = json.dumps(highlight)
-    origin_str    = json.dumps(origin)
-    dest_str      = json.dumps(destination)
-    buses_str     = json.dumps(live_buses)
-    result_str    = trip_result_json(trip_result)
-    legend_items  = json.dumps([
+    geojson_str  = json.dumps(routes_geojson)
+    colors_str   = json.dumps(ROUTE_COLORS)
+    origin_str   = json.dumps(origin)
+    dest_str     = json.dumps(destination)
+    buses_str    = json.dumps(live_buses)
+    legend_items = json.dumps([
         {"name": k.replace("_", " "), "color": v}
         for k, v in ROUTE_COLORS.items()
     ])
+
 
     return f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
-:root{{
-  --glass: rgba(8,13,22,0.82);
-  --glass-border: rgba(255,255,255,0.10);
-  --accent: #00d4ff;
-  --green: #22c55e;
-  --red: #ef4444;
-  --text: #e2eaf4;
-  --muted: #64748b;
-  --font: 'Inter', system-ui, sans-serif;
-}}
 * {{ margin:0; padding:0; box-sizing:border-box; }}
-html, body {{ width:100%; height:100%; font-family: var(--font); overflow:hidden; }}
+html, body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
+  font-family: system-ui, sans-serif; }}
 #map {{ width:100%; height:100vh; }}
 
-/* ── glass card mixin ── */
+/* glass card base */
 .card {{
-  background: var(--glass);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border: 1px solid var(--glass-border);
+  background: rgba(10,16,26,0.88);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255,255,255,0.10);
   border-radius: 14px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.45);
-  color: var(--text);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  color: #e2eaf4;
 }}
 
-/* ═══════════════════════════════════════════
-   TOP CENTRE — origin / destination inputs
-═══════════════════════════════════════════ */
+/* ── TOP PANEL ── */
 #top-panel {{
-  position: absolute;
-  top: 14px;
-  left: 50%;
+  position: absolute; top: 14px; left: 50%;
   transform: translateX(-50%);
-  z-index: 1000;
-  width: min(520px, 94vw);
+  z-index: 1000; width: min(500px, 92vw);
   padding: 12px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  display: flex; flex-direction: column; gap: 8px;
 }}
-
-.point-row {{
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.row {{ display:flex; align-items:center; gap:8px; }}
+.dot {{ width:11px; height:11px; border-radius:50%; flex-shrink:0;
+  border:2px solid rgba(255,255,255,.5); }}
+.pick-btn {{
+  flex-shrink:0; padding:6px 13px; border-radius:8px; border:1.5px solid;
+  font-size:12px; font-weight:700; cursor:pointer; background:transparent;
+  transition:all .15s; white-space:nowrap;
 }}
-
-.point-dot {{
-  width: 12px; height: 12px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  border: 2px solid rgba(255,255,255,0.6);
+.pick-btn:hover {{ filter:brightness(1.2); transform:translateY(-1px); }}
+.pick-btn.green {{ border-color:#22c55e; color:#4ade80; }}
+.pick-btn.green.on {{ background:#22c55e; color:#000;
+  box-shadow:0 0 12px rgba(34,197,94,.5); }}
+.pick-btn.red {{ border-color:#ef4444; color:#f87171; }}
+.pick-btn.red.on {{ background:#ef4444; color:#fff;
+  box-shadow:0 0 12px rgba(239,68,68,.5); }}
+.coord-box {{
+  flex:1; min-width:0;
+  background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.13);
+  border-radius:8px; padding:7px 10px;
+  font-size:12px; font-family:monospace; color:#e2eaf4;
+  outline:none; transition:border-color .15s;
 }}
-
-.point-btn {{
-  flex-shrink: 0;
-  padding: 6px 12px;
-  border-radius: 8px;
-  border: 1.5px solid;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all .15s;
-  background: transparent;
-  white-space: nowrap;
+.coord-box::placeholder {{ color:#475569; }}
+.coord-box:focus {{ border-color:#00d4ff; }}
+.x-btn {{
+  flex-shrink:0; width:24px; height:24px; border-radius:50%;
+  border:1px solid rgba(255,255,255,.15); background:rgba(255,255,255,.06);
+  color:#64748b; font-size:12px; cursor:pointer; line-height:1;
+  transition:all .15s;
 }}
-.point-btn:hover {{ filter: brightness(1.2); transform: translateY(-1px); }}
-.point-btn.origin  {{ border-color: var(--green); color: #4ade80; }}
-.point-btn.origin.active  {{ background: var(--green); color:#000; box-shadow: 0 0 12px rgba(34,197,94,.5); }}
-.point-btn.dest    {{ border-color: var(--red);   color: #f87171; }}
-.point-btn.dest.active    {{ background: var(--red);   color:#fff; box-shadow: 0 0 12px rgba(239,68,68,.5); }}
-
-.coord-input {{
-  flex: 1;
-  background: rgba(255,255,255,0.07);
-  border: 1px solid rgba(255,255,255,0.13);
-  border-radius: 8px;
-  padding: 6px 10px;
-  font-size: 12px;
-  font-family: 'JetBrains Mono', monospace;
-  color: var(--text);
-  outline: none;
-  transition: border-color .15s;
-  min-width: 0;
-}}
-.coord-input::placeholder {{ color: var(--muted); }}
-.coord-input:focus {{ border-color: var(--accent); }}
-.coord-input.has-val {{ border-color: rgba(255,255,255,0.25); }}
-
-.clear-btn {{
-  flex-shrink: 0;
-  width: 24px; height: 24px;
-  border-radius: 50%;
-  border: 1px solid rgba(255,255,255,0.15);
-  background: rgba(255,255,255,0.06);
-  color: var(--muted);
-  font-size: 13px;
-  cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  transition: all .15s;
-}}
-.clear-btn:hover {{ background: rgba(255,255,255,0.15); color: var(--text); }}
-
-.divider {{ height: 1px; background: var(--glass-border); margin: 2px 0; }}
-
-.reset-row {{
-  display: flex;
-  justify-content: flex-end;
-}}
+.x-btn:hover {{ background:rgba(255,255,255,.18); color:#e2eaf4; }}
+.hr {{ height:1px; background:rgba(255,255,255,.08); }}
 .reset-btn {{
-  background: transparent;
-  border: 1px solid rgba(148,163,184,.35);
-  border-radius: 7px;
-  color: #94a3b8;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 4px 12px;
-  cursor: pointer;
-  transition: all .15s;
-  letter-spacing: .03em;
+  background:transparent; border:1px solid rgba(148,163,184,.3);
+  border-radius:7px; color:#94a3b8; font-size:11px; font-weight:600;
+  padding:4px 14px; cursor:pointer; margin-left:auto; transition:all .15s;
 }}
-.reset-btn:hover {{ background: rgba(148,163,184,.15); color: var(--text); }}
+.reset-btn:hover {{ background:rgba(148,163,184,.15); color:#e2eaf4; }}
 
 /* crosshair when picking */
-.leaflet-container.picking {{ cursor: crosshair !important; }}
+.picking {{ cursor:crosshair !important; }}
 
-/* ═══════════════════════════════════════════
-   BOTTOM CENTRE — result card  (slides up)
-═══════════════════════════════════════════ */
+/* ── RESULT CARD ── */
 #result-card {{
-  position: absolute;
-  bottom: 20px;
-  left: 50%;
-  transform: translateX(-50%) translateY(300px);
-  z-index: 1000;
-  width: min(480px, 92vw);
-  padding: 14px 16px;
-  transition: transform .4s cubic-bezier(.34,1.56,.64,1);
-  pointer-events: none;
+  position:absolute; bottom:20px; left:50%;
+  transform:translateX(-50%) translateY(300px);
+  transition:transform .4s cubic-bezier(.34,1.56,.64,1);
+  z-index:1000; width:min(460px, 92vw);
+  padding:14px 16px; pointer-events:none;
 }}
-#result-card.visible {{
-  transform: translateX(-50%) translateY(0);
-  pointer-events: all;
+#result-card.show {{
+  transform:translateX(-50%) translateY(0);
+  pointer-events:all;
 }}
-
-.result-summary {{
-  font-size: 13px;
-  font-weight: 700;
-  padding: 7px 12px;
-  border-radius: 8px;
-  margin-bottom: 10px;
-  text-align: center;
-  letter-spacing: .02em;
+.summary {{
+  text-align:center; font-size:13px; font-weight:700;
+  padding:7px 12px; border-radius:8px; margin-bottom:10px;
 }}
-.result-summary.success {{
-  background: rgba(34,197,94,.15);
-  border: 1px solid rgba(34,197,94,.3);
-  color: #4ade80;
-}}
-.result-summary.transfer {{
-  background: rgba(251,191,36,.12);
-  border: 1px solid rgba(251,191,36,.3);
-  color: #fbbf24;
-}}
-.result-summary.error {{
-  background: rgba(239,68,68,.13);
-  border: 1px solid rgba(239,68,68,.3);
-  color: #f87171;
-}}
-
-.steps {{ display: flex; flex-direction: column; gap: 6px; }}
+.summary.ok  {{ background:rgba(34,197,94,.15); border:1px solid rgba(34,197,94,.3); color:#4ade80; }}
+.summary.xfr {{ background:rgba(251,191,36,.13); border:1px solid rgba(251,191,36,.3); color:#fbbf24; }}
+.summary.err {{ background:rgba(239,68,68,.13);  border:1px solid rgba(239,68,68,.3);  color:#f87171; }}
+.steps {{ display:flex; flex-direction:column; gap:6px; }}
 .step {{
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 8px 10px;
-  background: rgba(255,255,255,0.05);
-  border-radius: 8px;
-  border: 1px solid rgba(255,255,255,0.07);
+  display:flex; align-items:flex-start; gap:10px;
+  padding:8px 10px; border-radius:8px;
+  background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.07);
 }}
-.step-icon {{ font-size: 16px; flex-shrink: 0; line-height: 1.4; }}
-.step-body {{ display: flex; flex-direction: column; gap: 2px; min-width: 0; }}
-.step-main {{ font-size: 13px; color: var(--text); font-weight: 500; }}
-.step-sub  {{ font-size: 11px; color: var(--muted); }}
-.line-pill {{
-  display: inline-block;
-  font-size: 11px;
-  font-weight: 700;
-  padding: 1px 8px;
-  border-radius: 12px;
-  white-space: nowrap;
+.si {{ font-size:15px; flex-shrink:0; line-height:1.5; }}
+.sb {{ display:flex; flex-direction:column; gap:2px; }}
+.sm {{ font-size:13px; color:#e2eaf4; font-weight:500; }}
+.ss {{ font-size:11px; color:#64748b; }}
+.pill {{
+  display:inline-block; font-size:11px; font-weight:700;
+  padding:1px 8px; border-radius:12px;
 }}
 
-/* ═══════════════════════════════════════════
-   TOP RIGHT — legend toggle + panel
-═══════════════════════════════════════════ */
-#legend-btn {{
-  position: absolute;
-  top: 14px;
-  right: 14px;
-  z-index: 1001;
-  width: 38px; height: 38px;
-  border-radius: 10px;
-  border: 1px solid var(--glass-border);
-  background: var(--glass);
-  backdrop-filter: blur(14px);
-  color: var(--text);
-  font-size: 18px;
-  cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  box-shadow: 0 4px 16px rgba(0,0,0,.35);
-  transition: background .15s;
+/* ── LEGEND ── */
+#leg-btn {{
+  position:absolute; top:14px; right:14px; z-index:1001;
+  width:38px; height:38px; border-radius:10px;
+  background:rgba(10,16,26,.88); backdrop-filter:blur(14px);
+  border:1px solid rgba(255,255,255,.10); color:#e2eaf4;
+  font-size:18px; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  box-shadow:0 4px 16px rgba(0,0,0,.4);
 }}
-#legend-btn:hover {{ background: rgba(8,13,22,0.95); }}
+#leg-panel {{
+  position:absolute; top:60px; right:14px; z-index:1000;
+  width:190px; max-height:55vh; overflow-y:auto;
+  padding:10px 12px; display:none; flex-direction:column; gap:5px;
+}}
+#leg-panel.open {{ display:flex; }}
+.li {{ display:flex; align-items:center; gap:7px; font-size:12px; color:#e2eaf4; }}
+.ld {{ width:9px; height:9px; border-radius:50%; flex-shrink:0; }}
 
-#legend-panel {{
-  position: absolute;
-  top: 60px;
-  right: 14px;
-  z-index: 1000;
-  width: 200px;
-  max-height: 60vh;
-  overflow-y: auto;
-  padding: 12px 14px;
-  display: none;
-  flex-direction: column;
-  gap: 6px;
-}}
-#legend-panel.open {{ display: flex; }}
-.legend-item {{
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--text);
-}}
-.legend-dot {{
-  width: 10px; height: 10px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}}
-#legend-panel::-webkit-scrollbar {{ width: 3px; }}
-#legend-panel::-webkit-scrollbar-thumb {{ background: var(--glass-border); border-radius:2px; }}
-
-/* ═══════════════════════════════════════════
-   BOTTOM RIGHT — live bus badge
-═══════════════════════════════════════════ */
+/* ── LIVE BADGE ── */
 #live-badge {{
-  position: absolute;
-  bottom: 24px;
-  right: 14px;
-  z-index: 1000;
-  padding: 6px 14px;
-  border-radius: 20px;
-  font-size: 11px;
-  font-weight: 600;
-  color: #4ade80;
-  border: 1px solid rgba(34,197,94,.3);
-  display: flex; align-items: center; gap: 6px;
-  letter-spacing: .03em;
+  position:absolute; bottom:20px; right:14px; z-index:1000;
+  padding:5px 13px; border-radius:20px; font-size:11px; font-weight:600;
+  color:#4ade80; border:1px solid rgba(34,197,94,.3);
+  background:rgba(10,16,26,.88); backdrop-filter:blur(14px);
+  display:flex; align-items:center; gap:6px;
 }}
-.live-dot {{
-  width: 7px; height: 7px;
-  border-radius: 50%;
-  background: #22c55e;
-  animation: blink 1.4s infinite;
-}}
+.ld-dot {{ width:7px; height:7px; border-radius:50%; background:#22c55e;
+  animation:blink 1.4s infinite; }}
 @keyframes blink {{ 0%,100%{{opacity:1;}} 50%{{opacity:.2;}} }}
 
-/* Leaflet zoom control */
-.leaflet-control-zoom {{ border: none !important; }}
+/* leaflet zoom */
+.leaflet-control-zoom {{ border:none !important; }}
 .leaflet-control-zoom a {{
-  background: var(--glass) !important;
-  backdrop-filter: blur(14px) !important;
-  color: var(--text) !important;
-  border: 1px solid var(--glass-border) !important;
-  box-shadow: none !important;
+  background:rgba(10,16,26,.88) !important; color:#e2eaf4 !important;
+  border:1px solid rgba(255,255,255,.10) !important;
 }}
-.leaflet-control-zoom a:hover {{ background: rgba(8,13,22,.95) !important; }}
 </style>
 </head>
 <body>
 <div id="map"></div>
 
-<!-- ═══ TOP PANEL ═══ -->
+<!-- TOP PANEL -->
 <div id="top-panel" class="card">
-  <!-- Origin row -->
-  <div class="point-row">
-    <span class="point-dot" style="background:#22c55e"></span>
-    <button class="point-btn origin" id="btn-origin" onclick="toggleMode('set_origin')">
-      📍 Pick
-    </button>
-    <input class="coord-input" id="input-origin"
-           placeholder="Origin  lat, lon  e.g. 35.5612, 45.4320"
-           onchange="applyManual('origin', this.value)"
-           oninput="this.classList.toggle('has-val', this.value.length>0)"/>
-    <button class="clear-btn" onclick="clearPoint('origin')" title="Clear">✕</button>
+  <div class="row">
+    <span class="dot" style="background:#22c55e"></span>
+    <button class="pick-btn green" id="btn-o" onclick="toggleMode('origin')">📍 Pick</button>
+    <input class="coord-box" id="inp-o" placeholder="Origin — paste lat, lon from Google Maps"
+           oninput="onCoordInput('origin', this.value)"/>
+    <button class="x-btn" onclick="clearPt('origin')">✕</button>
   </div>
-
-  <div class="divider"></div>
-
-  <!-- Destination row -->
-  <div class="point-row">
-    <span class="point-dot" style="background:#ef4444"></span>
-    <button class="point-btn dest" id="btn-dest" onclick="toggleMode('set_destination')">
-      🏁 Pick
-    </button>
-    <input class="coord-input" id="input-dest"
-           placeholder="Destination  lat, lon  e.g. 35.5480, 45.4150"
-           onchange="applyManual('destination', this.value)"
-           oninput="this.classList.toggle('has-val', this.value.length>0)"/>
-    <button class="clear-btn" onclick="clearPoint('destination')" title="Clear">✕</button>
+  <div class="hr"></div>
+  <div class="row">
+    <span class="dot" style="background:#ef4444"></span>
+    <button class="pick-btn red" id="btn-d" onclick="toggleMode('dest')">🏁 Pick</button>
+    <input class="coord-box" id="inp-d" placeholder="Destination — paste lat, lon from Google Maps"
+           oninput="onCoordInput('dest', this.value)"/>
+    <button class="x-btn" onclick="clearPt('dest')">✕</button>
   </div>
-
-  <div class="divider"></div>
-  <div class="reset-row">
-    <button class="reset-btn" onclick="resetAll()">↺ Reset</button>
-  </div>
+  <div class="hr"></div>
+  <div class="row"><button class="reset-btn" onclick="resetAll()">↺ Reset</button></div>
 </div>
 
-<!-- ═══ LEGEND ═══ -->
-<button id="legend-btn" onclick="toggleLegend()" title="Bus lines">🗺</button>
-<div id="legend-panel" class="card">
-  <div style="font-size:10px;font-weight:700;letter-spacing:.12em;
-    color:var(--muted);text-transform:uppercase;margin-bottom:4px;">Bus Lines</div>
+<!-- LEGEND -->
+<button id="leg-btn" onclick="toggleLeg()">🗺</button>
+<div id="leg-panel" class="card">
+  <div style="font-size:9px;font-weight:700;letter-spacing:.12em;color:#475569;
+    text-transform:uppercase;margin-bottom:4px;">Bus Lines</div>
 </div>
 
-<!-- ═══ RESULT CARD ═══ -->
-<div id="result-card" class="card">
-  <div id="result-inner"></div>
-</div>
+<!-- RESULT -->
+<div id="result-card" class="card"><div id="result-inner"></div></div>
 
-<!-- ═══ LIVE BADGE ═══ -->
-<div id="live-badge" class="card">
-  <span class="live-dot"></span>
-  <span id="bus-count">0 buses</span>
-</div>
+<!-- LIVE BADGE -->
+<div id="live-badge"><span class="ld-dot"></span><span id="bus-ct">0 buses</span></div>
 
 <script>
-// ── Data ─────────────────────────────────────────────────────────────────────
-const COLORS      = {colors_str};
-const HIGHLIGHT   = new Set({highlight_str});
-const geojson     = {geojson_str};
-const INIT_ORIGIN = {origin_str};
-const INIT_DEST   = {dest_str};
-const INIT_BUSES  = {buses_str};
-const INIT_RESULT = {result_str};
-const LEGEND      = {legend_items};
-const SUPA_URL    = "{supabase_url}";
-const SUPA_KEY    = "{supabase_key}";
+const COLORS   = {colors_str};
+const GEOJSON  = {geojson_str};
+const LEGEND   = {legend_items};
+const INIT_O   = {origin_str};
+const INIT_D   = {dest_str};
+const BUSES    = {buses_str};
+const SUPA_URL = "{supabase_url}";
+const SUPA_KEY = "{supabase_key}";
+const MAX_WALK = {MAX_WALK_KM};
 
 // ── Map ───────────────────────────────────────────────────────────────────────
-const map = L.map('map', {{
-  center: [{DEFAULT_CENTER[0]}, {DEFAULT_CENTER[1]}],
-  zoom: {DEFAULT_ZOOM},
-  minZoom: 11,
-  maxZoom: 19,
-  zoomControl: true,
-}});
-L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-  attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-  maxZoom: 19,
-}}).addTo(map);
+const map = L.map('map',{{center:[{DEFAULT_CENTER[0]},{DEFAULT_CENTER[1]}],
+  zoom:{DEFAULT_ZOOM},minZoom:10,maxZoom:19}});
+L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',
+  {{attribution:'© OpenStreetMap',maxZoom:19}}).addTo(map);
 
-// ── Routes — managed via updateRouteHighlight() ───────────────────────────────
-let activeHighlight = new Set();
-// Initial draw with no highlights; replaced whenever points change
-function updateRouteHighlight(names) {{
-  activeHighlight = new Set(names);
-  if (window._routeLayer) map.removeLayer(window._routeLayer);
-  window._routeLayer = L.geoJSON(geojson, {{
+// ── Route layer (re-drawn on highlight change) ────────────────────────────────
+let routeLayer = null;
+function drawRoutes(active) {{
+  if (routeLayer) map.removeLayer(routeLayer);
+  routeLayer = L.geoJSON(GEOJSON, {{
     style: f => {{
       const n = (f.properties && f.properties.layer) || '';
       const c = COLORS[n] || '#3388ff';
-      if (activeHighlight.size > 0) {{
-        const active = activeHighlight.has(n);
-        return {{ color: c, weight: active ? 7 : 2, opacity: active ? 1.0 : 0.15 }};
-      }}
-      return {{ color: c, weight: 4, opacity: 0.88 }};
+      if (active && active.size > 0)
+        return active.has(n)
+          ? {{color:c, weight:7, opacity:1.0}}
+          : {{color:c, weight:2, opacity:0.13}};
+      return {{color:c, weight:4, opacity:0.88}};
     }},
-    onEachFeature: (f, l) => {{
-      const n = (f.properties && f.properties.layer) || 'Route';
-      l.bindTooltip(n, {{ sticky: true }});
-    }}
+    onEachFeature:(f,l) => l.bindTooltip(
+      (f.properties&&f.properties.layer)||'Route', {{sticky:true}})
   }}).addTo(map);
 }}
-updateRouteHighlight([]);
+drawRoutes(null);
 
 // ── Legend ────────────────────────────────────────────────────────────────────
-const legendPanel = document.getElementById('legend-panel');
+const legPanel = document.getElementById('leg-panel');
 LEGEND.forEach(item => {{
-  const div = document.createElement('div');
-  div.className = 'legend-item';
-  div.innerHTML = `<span class="legend-dot" style="background:${{item.color}}"></span>${{item.name}}`;
-  legendPanel.appendChild(div);
+  const d = document.createElement('div');
+  d.className = 'li';
+  d.innerHTML = `<span class="ld" style="background:${{item.color}}"></span>${{item.name}}`;
+  legPanel.appendChild(d);
 }});
-function toggleLegend() {{ legendPanel.classList.toggle('open'); }}
+function toggleLeg() {{ legPanel.classList.toggle('open'); }}
 
 // ── Markers ───────────────────────────────────────────────────────────────────
-const pinIcon = (color, label) => L.divIcon({{
-  html: `<div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
-    <div style="width:16px;height:16px;border-radius:50%;background:${{color}};
-      border:3px solid #fff;box-shadow:0 0 8px ${{color}}"></div>
-  </div>`,
-  iconSize: [16, 16], iconAnchor: [8, 8], className: ''
-}});
-
-let originMarker = null, destMarker = null;
-
-function setOriginMarker(lat, lon) {{
-  if (originMarker) map.removeLayer(originMarker);
-  originMarker = L.marker([lat, lon], {{ icon: pinIcon('#22c55e') }})
-    .bindTooltip('Origin').addTo(map);
-}}
-function setDestMarker(lat, lon) {{
-  if (destMarker) map.removeLayer(destMarker);
-  destMarker = L.marker([lat, lon], {{ icon: pinIcon('#ef4444') }})
-    .bindTooltip('Destination').addTo(map);
-}}
-
-if (INIT_ORIGIN) setOriginMarker(INIT_ORIGIN.lat, INIT_ORIGIN.lon);
-if (INIT_DEST)   setDestMarker(INIT_DEST.lat,   INIT_DEST.lon);
-if (jsOrigin && jsDest) computeAndShow();
-
-// ── Live buses ────────────────────────────────────────────────────────────────
-const busMarkers = {{}};
-const busIcon = (color, num) => L.divIcon({{
-  html: `<div style="background:${{color}};color:#fff;font-size:9px;font-weight:700;
-    padding:3px 7px;border-radius:6px;border:2px solid #fff;
-    box-shadow:0 0 8px ${{color}};white-space:nowrap;">${{num}}</div>`,
-  className: '', iconAnchor: [20, 12]
-}});
-function placeBus(b) {{
-  const color = COLORS[b.bus_line] || '#00d4ff';
-  const tip   = `${{b.bus_number}} · ${{(b.bus_line||'').replace(/_/g,' ')}} · ${{Math.round(b.speed_kmh||0)}} km/h`;
-  if (busMarkers[b.bus_number]) {{
-    busMarkers[b.bus_number].setLatLng([b.lat, b.lon]);
-    busMarkers[b.bus_number].setTooltipContent(tip);
-  }} else {{
-    busMarkers[b.bus_number] = L.marker([b.lat, b.lon], {{
-      icon: busIcon(color, b.bus_number), zIndexOffset: 500
-    }}).bindTooltip(tip).addTo(map);
-  }}
-  document.getElementById('bus-count').textContent =
-    Object.keys(busMarkers).length + ' bus' + (Object.keys(busMarkers).length !== 1 ? 'es' : '') + ' live';
-}}
-INIT_BUSES.forEach(placeBus);
-
-if (SUPA_URL && SUPA_KEY) {{
-  const {{ createClient }} = supabase;
-  const sb = createClient(SUPA_URL, SUPA_KEY, {{ auth: {{ persistSession: false }} }});
-  sb.channel('live-buses')
-    .on('postgres_changes', {{ event: '*', schema: 'public', table: 'active_locations' }},
-      payload => {{
-        const b = payload.new;
-        if (!b) return;
-        if (b.is_active) {{
-          placeBus(b);
-        }} else if (busMarkers[b.bus_number]) {{
-          map.removeLayer(busMarkers[b.bus_number]);
-          delete busMarkers[b.bus_number];
-        }}
-      }})
-    .subscribe();
-}}
-
-// ── Result card ───────────────────────────────────────────────────────────────
-function showResult(r) {{
-  const card  = document.getElementById('result-card');
-  const inner = document.getElementById('result-inner');
-  inner.innerHTML = '';
-
-  if (!r) {{ card.classList.remove('visible'); return; }}
-
-  if (r.error) {{
-    inner.innerHTML = `<div class="result-advice error">⚠️  ${{r.error}}</div>`;
-    card.classList.add('visible');
-    return;
-  }}
-
-  const steps = [];
-
-  // Step 1: walk to origin bus stop
-  steps.push(`
-    <div class="step">
-      <div class="step-icon">🚶</div>
-      <div class="step-body">
-        <div class="step-main">Walk <strong>${{r.origin_walk_m}} m</strong> to the nearest stop</div>
-        <div class="step-sub">on <span class="line-pill" style="background:${{r.origin_color}}22;color:${{r.origin_color}};border:1px solid ${{r.origin_color}}55">${{r.origin_label}}</span></div>
-      </div>
-    </div>`);
-
-  // Step 2: board the bus
-  steps.push(`
-    <div class="step">
-      <div class="step-icon">🚌</div>
-      <div class="step-body">
-        <div class="step-main">Board <span class="line-pill" style="background:${{r.origin_color}}22;color:${{r.origin_color}};border:1px solid ${{r.origin_color}}55">${{r.origin_label}}</span></div>
-        <div class="step-sub">${{r.same_route ? 'Ride to your destination stop' : 'Ride to the transfer stop'}}</div>
-      </div>
-    </div>`);
-
-  // Step 3: transfer if needed
-  if (!r.same_route) {{
-    steps.push(`
-      <div class="step">
-        <div class="step-icon">🔁</div>
-        <div class="step-body">
-          <div class="step-main">Transfer to <span class="line-pill" style="background:${{r.dest_color}}22;color:${{r.dest_color}};border:1px solid ${{r.dest_color}}55">${{r.dest_label}}</span></div>
-          <div class="step-sub">at the intersection of both routes</div>
-        </div>
-      </div>`);
-  }}
-
-  // Step 4: walk to destination
-  steps.push(`
-    <div class="step">
-      <div class="step-icon">📍</div>
-      <div class="step-body">
-        <div class="step-main">Walk <strong>${{r.dest_walk_m}} m</strong> to your destination</div>
-        <div class="step-sub">You've arrived!</div>
-      </div>
-    </div>`);
-
-  const summary = r.same_route
-    ? `<div class="result-summary success">✅ Direct route — no transfer needed</div>`
-    : `<div class="result-summary transfer">🔁 1 transfer required</div>`;
-
-  inner.innerHTML = summary + `<div class="steps">${{steps.join('')}}</div>`;
-  card.classList.add('visible');
-}}
-
-// ── JS Routing engine (runs entirely in browser, no Streamlit rerun needed) ──
-// Extract all route points from the geojson once at startup
-const ROUTE_POINTS = [];   // {{lat, lon, name}}
-const MAX_WALK_KM  = {MAX_WALK_KM};
-
-(function buildRoutePoints() {{
-  for (const feature of geojson.features || []) {{
-    const name = (feature.properties && feature.properties.layer) || 'Unknown';
-    const geom = feature.geometry || {{}};
-    const type = geom.type;
-    const coords = geom.coordinates || [];
-    const lines = type === 'LineString' ? [coords]
-                : type === 'MultiLineString' ? coords : [];
-    for (const line of lines) {{
-      for (const coord of line) {{
-        if (Array.isArray(coord) && coord.length >= 2) {{
-          ROUTE_POINTS.push({{ lat: coord[1], lon: coord[0], name }});
-        }}
-      }}
-    }}
-  }}
-}})();
-
-function haversineKm(lat1, lon1, lat2, lon2) {{
-  const R = 6371;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat/2)**2
-    + Math.cos(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180)
-    * Math.sin(dLon/2)**2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-}}
-
-function nearestRoute(lat, lon) {{
-  let best = null, bestDist = Infinity;
-  for (const p of ROUTE_POINTS) {{
-    const d = haversineKm(lat, lon, p.lat, p.lon);
-    if (d < bestDist) {{ bestDist = d; best = p; }}
-  }}
-  return best ? {{ name: best.name, distKm: bestDist }} : null;
-}}
-
-// Current origin/dest state (managed fully in JS)
-let jsOrigin = INIT_ORIGIN ? {{ lat: INIT_ORIGIN.lat, lon: INIT_ORIGIN.lon }} : null;
-let jsDest   = INIT_DEST   ? {{ lat: INIT_DEST.lat,   lon: INIT_DEST.lon   }} : null;
-
-function computeAndShow() {{
-  if (!jsOrigin || !jsDest) {{ showResult(null); return; }}
-
-  const oRoute = nearestRoute(jsOrigin.lat, jsOrigin.lon);
-  const dRoute = nearestRoute(jsDest.lat,   jsDest.lon);
-
-  if (!oRoute || !dRoute) {{
-    showResult({{ error: 'Could not find nearby routes.' }}); return;
-  }}
-  if (oRoute.distKm > MAX_WALK_KM) {{
-    showResult({{ error: `Origin is ${{(oRoute.distKm * 1000).toFixed(0)}} m from the nearest bus route — too far to walk (${{(MAX_WALK_KM*1000).toFixed(0)}} m max).` }}); return;
-  }}
-  if (dRoute.distKm > MAX_WALK_KM) {{
-    showResult({{ error: `Destination is ${{(dRoute.distKm * 1000).toFixed(0)}} m from the nearest bus route — too far to walk (${{(MAX_WALK_KM*1000).toFixed(0)}} m max).` }}); return;
-  }}
-
-  const same = oRoute.name === dRoute.name;
-  const oColor = COLORS[oRoute.name] || '#888';
-  const dColor = COLORS[dRoute.name] || '#888';
-
-  // Highlight the relevant routes on the map
-  updateRouteHighlight(same ? [oRoute.name] : [oRoute.name, dRoute.name]);
-
-  showResult({{
-    origin_route:  oRoute.name,
-    origin_label:  oRoute.name.replace(/_/g, ' '),
-    origin_color:  oColor,
-    origin_walk_m: Math.round(oRoute.distKm * 1000),
-    dest_route:    dRoute.name,
-    dest_label:    dRoute.name.replace(/_/g, ' '),
-    dest_color:    dColor,
-    dest_walk_m:   Math.round(dRoute.distKm * 1000),
-    same_route:    same,
+function pinIcon(color) {{
+  return L.divIcon({{
+    html:`<div style="width:16px;height:16px;border-radius:50%;
+      background:${{color}};border:3px solid #fff;
+      box-shadow:0 0 8px ${{color}}"></div>`,
+    iconSize:[16,16], iconAnchor:[8,8], className:''
   }});
 }}
+let mO=null, mD=null;
+function placeO(lat,lon) {{
+  if(mO) map.removeLayer(mO);
+  mO = L.marker([lat,lon],{{icon:pinIcon('#22c55e')}}).bindTooltip('Origin').addTo(map);
+}}
+function placeD(lat,lon) {{
+  if(mD) map.removeLayer(mD);
+  mD = L.marker([lat,lon],{{icon:pinIcon('#ef4444')}}).bindTooltip('Destination').addTo(map);
+}}
+if(INIT_O) {{ placeO(INIT_O.lat,INIT_O.lon); }}
+if(INIT_D) {{ placeD(INIT_D.lat,INIT_D.lon); }}
 
-// ── Click / manual input mode ─────────────────────────────────────────────────
-let mode = 'idle';
+// ── Live buses ────────────────────────────────────────────────────────────────
+const busM = {{}};
+function busIcon(color,num) {{
+  return L.divIcon({{
+    html:`<div style="background:${{color}};color:#fff;font-size:9px;font-weight:700;
+      padding:3px 7px;border-radius:6px;border:2px solid #fff;
+      box-shadow:0 0 8px ${{color}};white-space:nowrap;">${{num}}</div>`,
+    className:'', iconAnchor:[20,12]
+  }});
+}}
+function placeBus(b) {{
+  const c = COLORS[b.bus_line]||'#00d4ff';
+  const tip = b.bus_number+' · '+(b.bus_line||'').replace(/_/g,' ')+' · '+Math.round(b.speed_kmh||0)+' km/h';
+  if(busM[b.bus_number]) {{ busM[b.bus_number].setLatLng([b.lat,b.lon]); busM[b.bus_number].setTooltipContent(tip); }}
+  else busM[b.bus_number]=L.marker([b.lat,b.lon],{{icon:busIcon(c,b.bus_number),zIndexOffset:500}}).bindTooltip(tip).addTo(map);
+  document.getElementById('bus-ct').textContent=Object.keys(busM).length+' bus'+(Object.keys(busM).length!==1?'es':'')+' live';
+}}
+BUSES.forEach(placeBus);
+if(SUPA_URL&&SUPA_KEY) {{
+  const {{createClient}}=supabase;
+  const sb=createClient(SUPA_URL,SUPA_KEY,{{auth:{{persistSession:false}}}});
+  sb.channel('buses').on('postgres_changes',{{event:'*',schema:'public',table:'active_locations'}},p=>{{
+    const b=p.new; if(!b) return;
+    if(b.is_active) placeBus(b);
+    else if(busM[b.bus_number]) {{ map.removeLayer(busM[b.bus_number]); delete busM[b.bus_number]; }}
+  }}).subscribe();
+}}
 
+// ── Routing (fully in JS) ─────────────────────────────────────────────────────
+const PTS = [];
+for (const f of GEOJSON.features||[]) {{
+  const name = (f.properties&&f.properties.layer)||'';
+  const geom = f.geometry||{{}};
+  const lines = geom.type==='LineString' ? [geom.coordinates]
+              : geom.type==='MultiLineString' ? geom.coordinates : [];
+  for (const line of lines)
+    for (const c of line)
+      if(Array.isArray(c)&&c.length>=2) PTS.push({{lat:c[1],lon:c[0],name}});
+}}
+
+function hav(la1,lo1,la2,lo2) {{
+  const R=6371, d2r=Math.PI/180;
+  const dLa=(la2-la1)*d2r, dLo=(lo2-lo1)*d2r;
+  const a=Math.sin(dLa/2)**2+Math.cos(la1*d2r)*Math.cos(la2*d2r)*Math.sin(dLo/2)**2;
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}}
+
+function nearest(lat,lon) {{
+  let best=null, bd=Infinity;
+  for(const p of PTS) {{ const d=hav(lat,lon,p.lat,p.lon); if(d<bd){{bd=d;best=p;}} }}
+  return best ? {{name:best.name, km:bd}} : null;
+}}
+
+// State
+let ptO = INIT_O ? {{lat:INIT_O.lat,lon:INIT_O.lon}} : null;
+let ptD = INIT_D ? {{lat:INIT_D.lat,lon:INIT_D.lon}} : null;
+
+function compute() {{
+  if(!ptO||!ptD) {{ hideResult(); return; }}
+  const nO=nearest(ptO.lat,ptO.lon);
+  const nD=nearest(ptD.lat,ptD.lon);
+  if(!nO||!nD) {{ showErr('Could not match any route.'); return; }}
+  if(nO.km>MAX_WALK) {{ showErr('Origin is '+Math.round(nO.km*1000)+' m from nearest route — too far (max '+Math.round(MAX_WALK*1000)+' m).'); return; }}
+  if(nD.km>MAX_WALK) {{ showErr('Destination is '+Math.round(nD.km*1000)+' m from nearest route — too far (max '+Math.round(MAX_WALK*1000)+' m).'); return; }}
+
+  const same = nO.name===nD.name;
+  const cO=COLORS[nO.name]||'#888', cD=COLORS[nD.name]||'#888';
+  const lO=nO.name.replace(/_/g,' '), lD=nD.name.replace(/_/g,' ');
+  drawRoutes(new Set(same?[nO.name]:[nO.name,nD.name]));
+
+  const pill=(label,color)=>`<span class="pill" style="background:${{color}}22;color:${{color}};border:1px solid ${{color}}55">${{label}}</span>`;
+
+  const steps = [
+    `<div class="step"><span class="si">🚶</span><div class="sb">
+      <div class="sm">Walk <strong>${{Math.round(nO.km*1000)}} m</strong> to the nearest stop</div>
+      <div class="ss">to board ${{pill(lO,cO)}}</div></div></div>`,
+    `<div class="step"><span class="si">🚌</span><div class="sb">
+      <div class="sm">Board ${{pill(lO,cO)}}</div>
+      <div class="ss">${{same?'Ride directly to your stop':'Ride to the transfer stop'}}</div></div></div>`,
+  ];
+  if(!same) steps.push(
+    `<div class="step"><span class="si">🔁</span><div class="sb">
+      <div class="sm">Transfer to ${{pill(lD,cD)}}</div>
+      <div class="ss">where the two routes intersect</div></div></div>`);
+  steps.push(
+    `<div class="step"><span class="si">📍</span><div class="sb">
+      <div class="sm">Walk <strong>${{Math.round(nD.km*1000)}} m</strong> to your destination</div>
+      <div class="ss">You've arrived!</div></div></div>`);
+
+  document.getElementById('result-inner').innerHTML =
+    `<div class="summary ${{same?'ok':'xfr'}}">${{same?'✅ Direct — no transfer needed':'🔁 1 transfer required'}}</div>`+
+    `<div class="steps">${{steps.join('')}}</div>`;
+  document.getElementById('result-card').classList.add('show');
+}}
+
+function showErr(msg) {{
+  document.getElementById('result-inner').innerHTML=`<div class="summary err">⚠️ ${{msg}}</div>`;
+  document.getElementById('result-card').classList.add('show');
+}}
+function hideResult() {{
+  document.getElementById('result-card').classList.remove('show');
+  drawRoutes(null);
+}}
+
+// Run on load if both already set (page reload)
+if(ptO&&ptD) compute();
+
+// ── Mode (pick by clicking map) ───────────────────────────────────────────────
+let mode = '';
 function toggleMode(m) {{
-  mode = (mode === m) ? 'idle' : m;
-  document.getElementById('btn-origin').classList.toggle('active', mode === 'set_origin');
-  document.getElementById('btn-dest').classList.toggle('active',   mode === 'set_destination');
-  map.getContainer().classList.toggle('picking', mode !== 'idle');
+  mode = (mode===m) ? '' : m;
+  document.getElementById('btn-o').classList.toggle('on', mode==='origin');
+  document.getElementById('btn-d').classList.toggle('on', mode==='dest');
+  map.getContainer().classList.toggle('picking', mode!=='');
 }}
 
 map.on('click', e => {{
-  if (mode === 'idle') return;
-  const lat = e.latlng.lat, lon = e.latlng.lng;
-  const type = mode;
-
-  // Update input box
-  const inputId = type === 'set_origin' ? 'input-origin' : 'input-dest';
-  const inp = document.getElementById(inputId);
-  inp.value = lat.toFixed(6) + ', ' + lon.toFixed(6);
-  inp.classList.add('has-val');
-
-  // Update marker + JS state
-  if (type === 'set_origin') {{
-    setOriginMarker(lat, lon);
-    jsOrigin = {{ lat, lon }};
+  if(!mode) return;
+  const lat=e.latlng.lat, lon=e.latlng.lng;
+  const fmt = lat.toFixed(6)+', '+lon.toFixed(6);
+  if(mode==='origin') {{
+    ptO={{lat,lon}}; placeO(lat,lon);
+    document.getElementById('inp-o').value=fmt;
+    postPt('set_origin',lat,lon);
+    mode='dest';
+    document.getElementById('btn-o').classList.remove('on');
+    document.getElementById('btn-d').classList.add('on');
   }} else {{
-    setDestMarker(lat, lon);
-    jsDest = {{ lat, lon }};
+    ptD={{lat,lon}}; placeD(lat,lon);
+    document.getElementById('inp-d').value=fmt;
+    postPt('set_destination',lat,lon);
+    mode='';
+    document.getElementById('btn-d').classList.remove('on');
+    map.getContainer().classList.remove('picking');
   }}
-
-  // Compute route instantly — no rerun needed
-  computeAndShow();
-
-  // Relay to Streamlit (for session state persistence only)
-  postAction(type, lat, lon);
-
-  // Auto-advance origin → destination
-  mode = (type === 'set_origin') ? 'set_destination' : 'idle';
-  document.getElementById('btn-origin').classList.toggle('active', mode === 'set_origin');
-  document.getElementById('btn-dest').classList.toggle('active',   mode === 'set_destination');
-  map.getContainer().classList.toggle('picking', mode !== 'idle');
+  compute();
 }});
 
-// Parse "lat, lon" string from manual input
-function applyManual(type, raw) {{
-  const parts = raw.split(',').map(s => s.trim());
-  if (parts.length !== 2) return;
-  const lat = parseFloat(parts[0]), lon = parseFloat(parts[1]);
-  if (isNaN(lat) || isNaN(lon)) return;
-  if (type === 'origin') {{
-    setOriginMarker(lat, lon);
-    jsOrigin = {{ lat, lon }};
-    postAction('set_origin', lat, lon);
-  }} else {{
-    setDestMarker(lat, lon);
-    jsDest = {{ lat, lon }};
-    postAction('set_destination', lat, lon);
-  }}
-  map.setView([lat, lon], map.getZoom());
-  computeAndShow();
+// ── Manual coordinate input ───────────────────────────────────────────────────
+function parseCoord(raw) {{
+  // Accept: "35.566340, 45.394819" or "35.566340 45.394819" or "35.566340,45.394819"
+  const s = raw.trim().replace(/\s*,\s*/g, ',');
+  const parts = s.includes(',') ? s.split(',') : s.split(/\s+/);
+  if(parts.length<2) return null;
+  const la=parseFloat(parts[0]), lo=parseFloat(parts[1]);
+  return (isNaN(la)||isNaN(lo)) ? null : {{lat:la,lon:lo}};
 }}
 
-function clearPoint(type) {{
-  if (type === 'origin') {{
-    if (originMarker) {{ map.removeLayer(originMarker); originMarker = null; }}
-    document.getElementById('input-origin').value = '';
-    document.getElementById('input-origin').classList.remove('has-val');
-    jsOrigin = null;
+function onCoordInput(which, val) {{
+  // Try to parse on every keystroke — fire when we have a valid coord
+  const c = parseCoord(val);
+  if(!c) return;
+  if(which==='origin') {{
+    ptO=c; placeO(c.lat,c.lon);
+    map.setView([c.lat,c.lon], map.getZoom()<14?14:map.getZoom());
+    postPt('set_origin',c.lat,c.lon);
   }} else {{
-    if (destMarker) {{ map.removeLayer(destMarker); destMarker = null; }}
-    document.getElementById('input-dest').value = '';
-    document.getElementById('input-dest').classList.remove('has-val');
-    jsDest = null;
+    ptD=c; placeD(c.lat,c.lon);
+    map.setView([c.lat,c.lon], map.getZoom()<14?14:map.getZoom());
+    postPt('set_destination',c.lat,c.lon);
   }}
-  postAction('clear_' + type);
-  updateRouteHighlight([]);
-  showResult(null);
+  compute();
+}}
+
+function clearPt(which) {{
+  if(which==='origin') {{
+    ptO=null; if(mO){{map.removeLayer(mO);mO=null;}}
+    document.getElementById('inp-o').value='';
+  }} else {{
+    ptD=null; if(mD){{map.removeLayer(mD);mD=null;}}
+    document.getElementById('inp-d').value='';
+  }}
+  postPt('clear_'+which);
+  hideResult();
 }}
 
 function resetAll() {{
-  if (originMarker) {{ map.removeLayer(originMarker); originMarker = null; }}
-  if (destMarker)   {{ map.removeLayer(destMarker);   destMarker   = null; }}
-  document.getElementById('input-origin').value = '';
-  document.getElementById('input-dest').value   = '';
-  document.getElementById('input-origin').classList.remove('has-val');
-  document.getElementById('input-dest').classList.remove('has-val');
-  jsOrigin = null; jsDest = null;
-  mode = 'idle';
-  document.getElementById('btn-origin').classList.remove('active');
-  document.getElementById('btn-dest').classList.remove('active');
+  ptO=null; ptD=null;
+  if(mO){{map.removeLayer(mO);mO=null;}} if(mD){{map.removeLayer(mD);mD=null;}}
+  document.getElementById('inp-o').value='';
+  document.getElementById('inp-d').value='';
+  mode='';
+  document.getElementById('btn-o').classList.remove('on');
+  document.getElementById('btn-d').classList.remove('on');
   map.getContainer().classList.remove('picking');
-  updateRouteHighlight([]);
-  showResult(null);
-  postAction('reset');
+  postPt('reset');
+  hideResult();
 }}
 
-// ── postMessage to Streamlit ──────────────────────────────────────────────────
-function postAction(type, lat, lon) {{
-  let val = type;
-  if (lat !== undefined) val += ':' + lat.toFixed(6) + '_' + lon.toFixed(6);
-  val += '|' + Date.now();
-  window.parent.postMessage({{ type: 'map_action', payload: {{ raw: val }} }}, '*');
+// Pre-fill inputs if coming from session state
+if(INIT_O) document.getElementById('inp-o').value=INIT_O.lat.toFixed(6)+', '+INIT_O.lon.toFixed(6);
+if(INIT_D) document.getElementById('inp-d').value=INIT_D.lat.toFixed(6)+', '+INIT_D.lon.toFixed(6);
+
+// ── postMessage to Streamlit (session persistence only) ───────────────────────
+function postPt(type,lat,lon) {{
+  let v=type;
+  if(lat!==undefined) v+=':'+lat.toFixed(6)+'_'+lon.toFixed(6);
+  v+='|'+Date.now();
+  window.parent.postMessage({{type:'map_action',payload:{{raw:v}}}},'*');
 }}
 
-// Populate inputs from existing state
-if (INIT_ORIGIN) {{
-  const i = document.getElementById('input-origin');
-  i.value = INIT_ORIGIN.lat.toFixed(6) + ', ' + INIT_ORIGIN.lon.toFixed(6);
-  i.classList.add('has-val');
+// ── Resize iframe to window height ────────────────────────────────────────────
+function resize() {{
+  const h = window.innerHeight||900;
+  window.parent.postMessage({{type:'resize_map',height:h}},'*');
 }}
-if (INIT_DEST) {{
-  const i = document.getElementById('input-dest');
-  i.value = INIT_DEST.lat.toFixed(6) + ', ' + INIT_DEST.lon.toFixed(6);
-  i.classList.add('has-val');
-}}
-
-// Tell parent to resize this iframe to fill the viewport
-function resizeIframe() {{
-  const h = window.innerHeight || document.documentElement.clientHeight || 900;
-  window.parent.postMessage({{ type: 'resize_map', height: h }}, '*');
-}}
-resizeIframe();
-window.addEventListener('resize', resizeIframe);
+resize();
+window.addEventListener('resize', resize);
 </script>
 </body>
 </html>"""
