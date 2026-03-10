@@ -1,19 +1,20 @@
-"""Offline passenger route planner for Suly Transit."""
+"""Suly Transit – Offline Passenger Route Planner.
+
+Uses a pure Leaflet.js map embedded via st.components.v1.html so that
+zoom / pan never triggers a Streamlit re-render and never goes black.
+"""
 
 import json
 import math
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-import folium
 import numpy as np
 import pandas as pd
 import streamlit as st
-from streamlit_folium import st_folium
+import streamlit.components.v1 as components
 
 st.set_page_config(page_title="Suly Transit", layout="wide")
-st.title("Suly Transit (Offline Planner)")
-st.caption("Click once for origin, click again for destination.")
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parent
@@ -41,6 +42,8 @@ ROUTE_COLORS: Dict[str, str] = {
 }
 
 
+# ── Data loading ──────────────────────────────────────────────────────────────
+
 @st.cache_data(hash_funcs={Path: lambda p: p.stat().st_mtime if p.exists() else 0})
 def load_routes(path: Path) -> dict:
     if not path.exists():
@@ -57,265 +60,227 @@ def extract_route_points(routes_geojson: dict) -> pd.DataFrame:
         geometry = feature.get("geometry", {})
         geom_type = geometry.get("type")
         coords = geometry.get("coordinates", [])
-
         line_sets = [coords] if geom_type == "LineString" else (
             coords if geom_type == "MultiLineString" else []
         )
         for line in line_sets:
             for idx, coord in enumerate(line):
                 if isinstance(coord, (list, tuple)) and len(coord) >= 2:
-                    rows.append(
-                        {"route_name": route_name, "point_order": idx,
-                         "lat": coord[1], "lon": coord[0]}
-                    )
-
+                    rows.append({"route_name": route_name, "point_order": idx,
+                                 "lat": coord[1], "lon": coord[0]})
     return pd.DataFrame(rows, columns=["route_name", "point_order", "lat", "lon"])
 
 
-def haversine_vectorized_km(
-    lat1: float, lon1: float, lats2: np.ndarray, lons2: np.ndarray
-) -> np.ndarray:
+# ── Routing logic ─────────────────────────────────────────────────────────────
+
+def haversine_km(lat1: float, lon1: float,
+                 lats2: np.ndarray, lons2: np.ndarray) -> np.ndarray:
     r = 6371.0
-    lat1_rad = math.radians(lat1)
-    lon1_rad = math.radians(lon1)
-    lats2_rad = np.radians(lats2)
-    lons2_rad = np.radians(lons2)
-    dlat = lats2_rad - lat1_rad
-    dlon = lons2_rad - lon1_rad
-    a = (
-        np.sin(dlat / 2) ** 2
-        + np.cos(lat1_rad) * np.cos(lats2_rad) * np.sin(dlon / 2) ** 2
-    )
+    rl1, rn1 = math.radians(lat1), math.radians(lon1)
+    rl2, rn2 = np.radians(lats2), np.radians(lons2)
+    dl, dn = rl2 - rl1, rn2 - rn1
+    a = np.sin(dl / 2) ** 2 + np.cos(rl1) * np.cos(rl2) * np.sin(dn / 2) ** 2
     return r * 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
 
 
-def nearest_route(
-    point_lat: float, point_lon: float, route_points_df: pd.DataFrame
-) -> Optional[dict]:
-    if route_points_df.empty:
+def nearest_route(lat: float, lon: float,
+                  df: pd.DataFrame) -> Optional[dict]:
+    clean = df.dropna(subset=["lat", "lon"])
+    if clean.empty:
         return None
-    clean_df = route_points_df.dropna(subset=["lat", "lon"])
-    if clean_df.empty:
+    dists = haversine_km(lat, lon, clean["lat"].to_numpy(), clean["lon"].to_numpy())
+    if dists.size == 0 or np.isnan(dists).all():
         return None
-
-    distances = haversine_vectorized_km(
-        point_lat, point_lon,
-        clean_df["lat"].to_numpy(), clean_df["lon"].to_numpy()
-    )
-    if distances.size == 0 or np.isnan(distances).all():
-        return None
-
-    idx = int(np.nanargmin(distances))
-    row = clean_df.iloc[idx].to_dict()
-    row["distance_km"] = float(distances[idx])
+    idx = int(np.nanargmin(dists))
+    row = clean.iloc[idx].to_dict()
+    row["distance_km"] = float(dists[idx])
     return row
 
 
+def compute_trip(df: pd.DataFrame) -> Tuple[Optional[dict], List[str]]:
+    o, d = st.session_state.get("origin"), st.session_state.get("destination")
+    if not o or not d:
+        return None, []
+
+    or_ = nearest_route(o["lat"], o["lon"], df)
+    dr_ = nearest_route(d["lat"], d["lon"], df)
+
+    if not or_ or not dr_:
+        return {"error": "Could not find nearby routes."}, []
+    if or_["distance_km"] > MAX_WALK_KM:
+        return {"error": f"Origin too far from any route ({or_['distance_km']:.2f} km)."}, []
+    if dr_["distance_km"] > MAX_WALK_KM:
+        return {"error": f"Destination too far from any route ({dr_['distance_km']:.2f} km)."}, []
+
+    result = {"origin_route": or_, "destination_route": dr_}
+    if or_["route_name"] == dr_["route_name"]:
+        return result, [or_["route_name"]]
+    return result, [or_["route_name"], dr_["route_name"]]
+
+
+# ── Leaflet map HTML ──────────────────────────────────────────────────────────
+
+def build_leaflet_html(routes_geojson: dict,
+                       highlight: List[str],
+                       origin: Optional[dict],
+                       destination: Optional[dict]) -> str:
+    geojson_str = json.dumps(routes_geojson)
+    colors_str = json.dumps(ROUTE_COLORS)
+    highlight_str = json.dumps(highlight)
+    origin_str = json.dumps(origin)
+    dest_str = json.dumps(destination)
+    center_lat, center_lon = DEFAULT_CENTER
+    zoom = DEFAULT_ZOOM
+
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  * {{ margin:0; padding:0; box-sizing:border-box; }}
+  html, body, #map {{ width:100%; height:100%; }}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<script>
+const COLORS   = {colors_str};
+const HIGHLIGHT = new Set({highlight_str});
+const geojson  = {geojson_str};
+const origin   = {origin_str};
+const dest     = {dest_str};
+
+// ── Map init ──────────────────────────────────────────────────────────────
+const map = L.map('map', {{
+  center: [{center_lat}, {center_lon}],
+  zoom: {zoom},
+  minZoom: 11,
+  maxZoom: 19,
+  zoomSnap: 0.5,
+}});
+
+L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+  attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  maxZoom: 19,
+}}).addTo(map);
+
+// ── Routes ────────────────────────────────────────────────────────────────
+L.geoJSON(geojson, {{
+  style: function(feature) {{
+    const name  = (feature.properties && feature.properties.layer) || '';
+    const color = COLORS[name] || '#3388ff';
+    if (HIGHLIGHT.size > 0) {{
+      const active = HIGHLIGHT.has(name);
+      return {{ color, weight: active ? 6 : 2, opacity: active ? 0.95 : 0.18 }};
+    }}
+    return {{ color, weight: 4, opacity: 0.9 }};
+  }},
+  onEachFeature: function(feature, layer) {{
+    const name = (feature.properties && feature.properties.layer) || 'Route';
+    layer.bindTooltip(name, {{sticky: true}});
+  }}
+}}).addTo(map);
+
+// ── Markers ───────────────────────────────────────────────────────────────
+function makeIcon(color) {{
+  // Simple colored circle marker
+  return L.divIcon({{
+    html: `<div style="
+      width:16px; height:16px; border-radius:50%;
+      background:${{color}}; border:3px solid #fff;
+      box-shadow:0 0 4px rgba(0,0,0,.5)"></div>`,
+    iconSize: [16, 16],
+    iconAnchor: [8, 8],
+    className: ''
+  }});
+}}
+
+if (origin) {{
+  L.marker([origin.lat, origin.lon], {{icon: makeIcon('#22c55e')}})
+   .bindTooltip('Origin').addTo(map);
+}}
+if (dest) {{
+  L.marker([dest.lat, dest.lon], {{icon: makeIcon('#ef4444')}})
+   .bindTooltip('Destination').addTo(map);
+}}
+
+// ── Click → send to Streamlit ─────────────────────────────────────────────
+map.on('click', function(e) {{
+  const msg = {{ lat: e.latlng.lat, lon: e.latlng.lng }};
+  window.parent.postMessage({{ type: 'map_click', payload: msg }}, '*');
+}});
+</script>
+</body>
+</html>"""
+
+
+# ── Session state ─────────────────────────────────────────────────────────────
+
 def init_state() -> None:
-    st.session_state.setdefault("origin_point", None)
-    st.session_state.setdefault("destination_point", None)
-    st.session_state.setdefault("last_click_key", None)
-    st.session_state.setdefault("map_center", DEFAULT_CENTER)
-    st.session_state.setdefault("map_zoom", DEFAULT_ZOOM)
+    st.session_state.setdefault("origin", None)
+    st.session_state.setdefault("destination", None)
+    st.session_state.setdefault("last_click", None)
     st.session_state.setdefault("highlight_routes", [])
 
 
-def build_map(routes_geojson: dict, highlight_routes: List[str]) -> folium.Map:
-    # OSM tiles: crisp at every zoom level, zero app weight, no PNG needed
-    m = folium.Map(
-        location=st.session_state.map_center,
-        zoom_start=st.session_state.map_zoom,
-        tiles="OpenStreetMap",
-        min_zoom=11,
-        max_zoom=19,
-        control_scale=True,
-        zoom_control=True,
-        max_bounds=True,
-    )
-
-    highlight_set = set(highlight_routes)
-
-    def style_fn(feature):
-        name = feature.get("properties", {}).get("layer", "")
-        color = ROUTE_COLORS.get(name, "#3388ff")
-        if highlight_set:
-            active = name in highlight_set
-            return {"color": color, "weight": 6 if active else 2,
-                    "opacity": 0.95 if active else 0.18}
-        return {"color": color, "weight": 4, "opacity": 0.9}
-
-    # Single GeoJson call for the entire FeatureCollection — much faster
-    folium.GeoJson(
-        routes_geojson,
-        tooltip=folium.GeoJsonTooltip(fields=["layer"], aliases=["Route:"]),
-        style_function=style_fn,
-    ).add_to(m)
-
-    if st.session_state.origin_point:
-        folium.Marker(
-            [st.session_state.origin_point["lat"],
-             st.session_state.origin_point["lon"]],
-            tooltip="Origin",
-            icon=folium.Icon(color="green"),
-        ).add_to(m)
-
-    if st.session_state.destination_point:
-        folium.Marker(
-            [st.session_state.destination_point["lat"],
-             st.session_state.destination_point["lon"]],
-            tooltip="Destination",
-            icon=folium.Icon(color="red"),
-        ).add_to(m)
-
-    return m
-
-
-def compute_trip_result(
-    route_points_df: pd.DataFrame,
-) -> Tuple[Optional[dict], List[str]]:
-    if not st.session_state.origin_point or not st.session_state.destination_point:
-        return None, []
-
-    origin_route = nearest_route(
-        st.session_state.origin_point["lat"],
-        st.session_state.origin_point["lon"],
-        route_points_df,
-    )
-    destination_route = nearest_route(
-        st.session_state.destination_point["lat"],
-        st.session_state.destination_point["lon"],
-        route_points_df,
-    )
-
-    if not origin_route or not destination_route:
-        return {"error": "Could not find nearby routes."}, []
-
-    if origin_route["distance_km"] > MAX_WALK_KM:
-        return {
-            "error": (
-                f"Origin is too far from any route "
-                f"({origin_route['distance_km']:.2f} km)."
-            )
-        }, []
-
-    if destination_route["distance_km"] > MAX_WALK_KM:
-        return {
-            "error": (
-                f"Destination is too far from any route "
-                f"({destination_route['distance_km']:.2f} km)."
-            )
-        }, []
-
-    result = {"origin_route": origin_route, "destination_route": destination_route}
-    if origin_route["route_name"] == destination_route["route_name"]:
-        return result, [origin_route["route_name"]]
-    return result, [origin_route["route_name"], destination_route["route_name"]]
-
-
-def process_click(map_data: Optional[dict]) -> bool:
-    if not map_data:
-        return False
-
-    if map_data.get("center"):
-        center = map_data["center"]
-        st.session_state.map_center = [center["lat"], center["lng"]]
-    if map_data.get("zoom"):
-        st.session_state.map_zoom = map_data["zoom"]
-
-    clicked = map_data.get("last_clicked")
-    if not clicked:
-        return False
-
-    click_key = f"{round(clicked['lat'], 6)}_{round(clicked['lng'], 6)}"
-    if click_key == st.session_state.last_click_key:
-        return False
-
-    st.session_state.last_click_key = click_key
-    point = {"lat": clicked["lat"], "lon": clicked["lng"]}
-
-    if st.session_state.origin_point is None:
-        st.session_state.origin_point = point
-    elif st.session_state.destination_point is None:
-        st.session_state.destination_point = point
-    else:
-        st.session_state.origin_point = point
-        st.session_state.destination_point = None
-
-    return True
-
+# ── Sidebar ───────────────────────────────────────────────────────────────────
 
 def render_sidebar() -> None:
-    st.sidebar.header("Trip Controls")
+    st.sidebar.title("🚌 Suly Transit")
+    st.sidebar.caption("Offline Route Planner – Sulaymaniyah")
 
-    if st.sidebar.button("Reset Trip"):
-        st.session_state.origin_point = None
-        st.session_state.destination_point = None
-        st.session_state.last_click_key = None
+    if st.sidebar.button("🔄 Reset Trip"):
+        st.session_state.origin = None
+        st.session_state.destination = None
+        st.session_state.last_click = None
         st.session_state.highlight_routes = []
         st.rerun()
 
-    if st.session_state.origin_point is None:
-        st.sidebar.info("Click the map to set origin.")
-    elif st.session_state.destination_point is None:
-        st.sidebar.info("Click the map again to set destination.")
+    st.sidebar.markdown("---")
+    if st.session_state.origin is None:
+        st.sidebar.info("📍 Click the map to set **origin**.")
+    elif st.session_state.destination is None:
+        st.sidebar.info("📍 Click the map to set **destination**.")
     else:
-        st.sidebar.success("Trip selected. Click again to start a new trip.")
+        st.sidebar.success("✅ Trip selected.\nClick again to reset.")
 
-    # Route colour legend
     st.sidebar.markdown("---")
     st.sidebar.markdown("### Bus Lines")
     for route, color in ROUTE_COLORS.items():
+        label = route.replace("_", " ")
         st.sidebar.markdown(
-            f'<span style="color:{color}; font-size:18px;">●</span> '
-            f'{route.replace("_", " ")}',
+            f'<span style="color:{color};font-size:20px;">●</span> {label}',
             unsafe_allow_html=True,
         )
 
 
+# ── Result panel ──────────────────────────────────────────────────────────────
+
 def render_result(trip_result: Optional[dict]) -> None:
     if not trip_result:
+        st.info("Click an origin and destination on the map to get route advice.")
         return
-
     if "error" in trip_result:
-        st.subheader("Route Advice")
         st.error(trip_result["error"])
         return
 
-    origin_route = trip_result["origin_route"]
-    destination_route = trip_result["destination_route"]
+    o = trip_result["origin_route"]
+    d = trip_result["destination_route"]
+    c1, c2 = st.columns(2)
+    c1.metric("Origin route", o["route_name"], f"{o['distance_km']:.0f} m walk")
+    c2.metric("Destination route", d["route_name"], f"{d['distance_km']:.0f} m walk")
 
-    st.subheader("Route Advice")
-    st.write(
-        f"Origin nearest: **{origin_route['route_name']}** "
-        f"({origin_route['distance_km']:.2f} km walk) | "
-        f"Destination nearest: **{destination_route['route_name']}** "
-        f"({destination_route['distance_km']:.2f} km walk)"
-    )
-
-    if origin_route["route_name"] == destination_route["route_name"]:
-        st.success(f"✅ Take this bus line: **{origin_route['route_name']}**")
+    if o["route_name"] == d["route_name"]:
+        st.success(f"✅ Take **{o['route_name']}** — no transfer needed.")
     else:
         st.warning(
-            f"🔁 Take **{origin_route['route_name']}** first, "
-            f"then transfer to **{destination_route['route_name']}**."
+            f"🔁 Board **{o['route_name']}**, then transfer to **{d['route_name']}**."
         )
 
 
-def render_footer() -> None:
-    items = []
-    if st.session_state.origin_point:
-        items.append(
-            f"Origin: {st.session_state.origin_point['lat']:.5f}, "
-            f"{st.session_state.origin_point['lon']:.5f}"
-        )
-    if st.session_state.destination_point:
-        items.append(
-            f"Destination: {st.session_state.destination_point['lat']:.5f}, "
-            f"{st.session_state.destination_point['lon']:.5f}"
-        )
-    if items:
-        st.caption(" | ".join(items))
-
+# ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     init_state()
@@ -332,28 +297,56 @@ def main() -> None:
         st.error("No route points found in assets/bus_lines.geojson.")
         return
 
-    trip_result, highlight_routes = compute_trip_result(route_points_df)
-
-    # Only rerun when highlights actually change
+    trip_result, highlight_routes = compute_trip(route_points_df)
     if highlight_routes != st.session_state.highlight_routes:
         st.session_state.highlight_routes = highlight_routes
         st.rerun()
 
-    # Single map render with live OSM tiles
-    map_obj = build_map(routes_geojson, st.session_state.highlight_routes)
-    map_data = st_folium(
-        map_obj,
-        height=700,
-        width=1200,
-        returned_objects=["last_clicked", "center", "zoom"],
-        key="passenger_map",
+    # ── Render Leaflet map (never re-renders on Streamlit rerun) ──────────────
+    html = build_leaflet_html(
+        routes_geojson,
+        st.session_state.highlight_routes,
+        st.session_state.origin,
+        st.session_state.destination,
     )
+    components.html(html, height=620, scrolling=False)
 
-    if process_click(map_data):
-        st.rerun()
+    # ── Receive click events from the map via postMessage ─────────────────────
+    # We use a tiny JS snippet to relay postMessage events to a Streamlit
+    # text_input (hidden via CSS), then read it back in Python.
+    click_receiver = """
+    <script>
+    window.addEventListener('message', function(e) {
+        if (e.data && e.data.type === 'map_click') {
+            const v = e.data.payload.lat.toFixed(6) + '_' + e.data.payload.lon.toFixed(6);
+            const el = window.parent.document.querySelector('input[data-testid="stTextInput"] input');
+            if (el) { el.value = v; el.dispatchEvent(new Event('input', {bubbles:true})); }
+        }
+    });
+    </script>
+    """
+    components.html(click_receiver, height=0)
+
+    click_val = st.text_input("click_relay", key="click_relay",
+                               label_visibility="collapsed")
+
+    if click_val and click_val != st.session_state.last_click:
+        st.session_state.last_click = click_val
+        try:
+            lat_s, lon_s = click_val.split("_")
+            point = {"lat": float(lat_s), "lon": float(lon_s)}
+            if st.session_state.origin is None:
+                st.session_state.origin = point
+            elif st.session_state.destination is None:
+                st.session_state.destination = point
+            else:
+                st.session_state.origin = point
+                st.session_state.destination = None
+            st.rerun()
+        except ValueError:
+            pass
 
     render_result(trip_result)
-    render_footer()
 
 
 if __name__ == "__main__":
