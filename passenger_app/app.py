@@ -1,4 +1,4 @@
-"""Offline passenger route planner for Suly Transit."""
+"""Offline passenger route planner for Suly Transit — optimised build."""
 
 import base64
 import json
@@ -26,8 +26,6 @@ DEFAULT_CENTER = [35.56, 45.43]
 DEFAULT_ZOOM = 13
 MAX_WALK_KM = 0.70
 
-# Adjust these bounds until the PNG aligns correctly with your route GeoJSON.
-# Format: [[south_lat, west_lon], [north_lat, east_lon]]
 MAP_BOUNDS = [
     [35.50, 45.35],
     [35.62, 45.52],
@@ -50,49 +48,41 @@ ROUTE_COLORS: Dict[str, str] = {
 }
 
 
+# ── FIX 1: cache the base64 encoding so the PNG is only read & encoded once ──
+@st.cache_data
 def image_to_data_url(image_path: Path) -> str:
     encoded = base64.b64encode(image_path.read_bytes()).decode("utf-8")
     return f"data:image/png;base64,{encoded}"
 
 
-@st.cache_data
-def load_routes() -> dict:
-    if not ROUTES_FILE.exists():
-        raise FileNotFoundError(f"Missing route file: {ROUTES_FILE}")
-    with open(ROUTES_FILE, "r", encoding="utf-8") as f:
+# ── FIX 2: cache on file mtime so we only re-read when the file actually changes ──
+@st.cache_data(hash_funcs={Path: lambda p: p.stat().st_mtime if p.exists() else 0})
+def load_routes(path: Path) -> dict:
+    if not path.exists():
+        raise FileNotFoundError(f"Missing route file: {path}")
+    with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
 @st.cache_data
 def extract_route_points(routes_geojson: dict) -> pd.DataFrame:
     rows: List[dict] = []
-
     for feature in routes_geojson.get("features", []):
         route_name = feature.get("properties", {}).get("layer", "Unknown Route")
         geometry = feature.get("geometry", {})
         geom_type = geometry.get("type")
         coords = geometry.get("coordinates", [])
 
-        if geom_type == "LineString":
-            line_sets = [coords]
-        elif geom_type == "MultiLineString":
-            line_sets = coords
-        else:
-            continue
-
+        line_sets = [coords] if geom_type == "LineString" else (
+            coords if geom_type == "MultiLineString" else []
+        )
         for line in line_sets:
             for idx, coord in enumerate(line):
-                if not isinstance(coord, (list, tuple)) or len(coord) < 2:
-                    continue
-                lon, lat = coord[0], coord[1]
-                rows.append(
-                    {
-                        "route_name": route_name,
-                        "point_order": idx,
-                        "lat": lat,
-                        "lon": lon,
-                    }
-                )
+                if isinstance(coord, (list, tuple)) and len(coord) >= 2:
+                    rows.append(
+                        {"route_name": route_name, "point_order": idx,
+                         "lat": coord[1], "lon": coord[0]}
+                    )
 
     return pd.DataFrame(rows, columns=["route_name", "point_order", "lat", "lon"])
 
@@ -105,15 +95,13 @@ def haversine_vectorized_km(
     lon1_rad = math.radians(lon1)
     lats2_rad = np.radians(lats2)
     lons2_rad = np.radians(lons2)
-
     dlat = lats2_rad - lat1_rad
     dlon = lons2_rad - lon1_rad
     a = (
         np.sin(dlat / 2) ** 2
         + np.cos(lat1_rad) * np.cos(lats2_rad) * np.sin(dlon / 2) ** 2
     )
-    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
-    return r * c
+    return r * 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
 
 
 def nearest_route(
@@ -121,19 +109,14 @@ def nearest_route(
 ) -> Optional[dict]:
     if route_points_df.empty:
         return None
-
-    clean_df = route_points_df.copy()
-    clean_df["lat"] = pd.to_numeric(clean_df["lat"], errors="coerce")
-    clean_df["lon"] = pd.to_numeric(clean_df["lon"], errors="coerce")
-    clean_df = clean_df.dropna(subset=["lat", "lon"])
-
+    clean_df = route_points_df.dropna(subset=["lat", "lon"])
     if clean_df.empty:
         return None
 
-    lats = clean_df["lat"].to_numpy()
-    lons = clean_df["lon"].to_numpy()
-    distances = haversine_vectorized_km(point_lat, point_lon, lats, lons)
-
+    distances = haversine_vectorized_km(
+        point_lat, point_lon,
+        clean_df["lat"].to_numpy(), clean_df["lon"].to_numpy()
+    )
     if distances.size == 0 or np.isnan(distances).all():
         return None
 
@@ -149,8 +132,13 @@ def init_state() -> None:
     st.session_state.setdefault("last_click_key", None)
     st.session_state.setdefault("map_center", DEFAULT_CENTER)
     st.session_state.setdefault("map_zoom", DEFAULT_ZOOM)
+    # FIX 3: track highlight state so we only trigger rerun when it changes
+    st.session_state.setdefault("highlight_routes", [])
 
 
+# ── FIX 4: build the whole GeoJSON layer in ONE folium.GeoJson call ──────────
+#   Passing a style_function that inspects `feature["properties"]["layer"]` is
+#   much faster than iterating Python-side and adding N separate GeoJson objects.
 def build_map(routes_geojson: dict, highlight_routes: List[str]) -> folium.Map:
     m = folium.Map(
         location=st.session_state.map_center,
@@ -165,7 +153,7 @@ def build_map(routes_geojson: dict, highlight_routes: List[str]) -> folium.Map:
 
     if MAP_IMAGE.exists():
         folium.raster_layers.ImageOverlay(
-            image=image_to_data_url(MAP_IMAGE),
+            image=image_to_data_url(MAP_IMAGE),   # already cached
             bounds=MAP_BOUNDS,
             opacity=1.0,
             interactive=False,
@@ -175,40 +163,36 @@ def build_map(routes_geojson: dict, highlight_routes: List[str]) -> folium.Map:
     else:
         st.warning(f"Map image not found: {MAP_IMAGE}")
 
-    for feature in routes_geojson.get("features", []):
-        route_name = feature.get("properties", {}).get("layer", "Bus Route")
-        color = ROUTE_COLORS.get(route_name, "#3388ff")
+    highlight_set = set(highlight_routes)
 
-        if highlight_routes:
-            opacity = 0.95 if route_name in highlight_routes else 0.18
-            weight = 6 if route_name in highlight_routes else 2
-        else:
-            opacity = 0.85
-            weight = 3
+    def style_fn(feature):
+        name = feature.get("properties", {}).get("layer", "")
+        color = ROUTE_COLORS.get(name, "#3388ff")
+        if highlight_set:
+            active = name in highlight_set
+            return {"color": color, "weight": 6 if active else 2,
+                    "opacity": 0.95 if active else 0.18}
+        return {"color": color, "weight": 3, "opacity": 0.85}
 
-        folium.GeoJson(
-            feature,
-            tooltip=route_name,
-            style_function=lambda _, color=color, weight=weight, opacity=opacity: {
-                "color": color,
-                "weight": weight,
-                "opacity": opacity,
-            },
-        ).add_to(m)
+    # Single GeoJson call for the entire FeatureCollection
+    folium.GeoJson(
+        routes_geojson,
+        tooltip=folium.GeoJsonTooltip(fields=["layer"], aliases=["Route:"]),
+        style_function=style_fn,
+    ).add_to(m)
 
     if st.session_state.origin_point:
         folium.Marker(
-            [st.session_state.origin_point["lat"], st.session_state.origin_point["lon"]],
+            [st.session_state.origin_point["lat"],
+             st.session_state.origin_point["lon"]],
             tooltip="Origin",
             icon=folium.Icon(color="green"),
         ).add_to(m)
 
     if st.session_state.destination_point:
         folium.Marker(
-            [
-                st.session_state.destination_point["lat"],
-                st.session_state.destination_point["lon"],
-            ],
+            [st.session_state.destination_point["lat"],
+             st.session_state.destination_point["lon"]],
             tooltip="Destination",
             icon=folium.Icon(color="red"),
         ).add_to(m)
@@ -252,14 +236,9 @@ def compute_trip_result(
             )
         }, []
 
-    result = {
-        "origin_route": origin_route,
-        "destination_route": destination_route,
-    }
-
+    result = {"origin_route": origin_route, "destination_route": destination_route}
     if origin_route["route_name"] == destination_route["route_name"]:
         return result, [origin_route["route_name"]]
-
     return result, [origin_route["route_name"], destination_route["route_name"]]
 
 
@@ -267,22 +246,19 @@ def process_click(map_data: Optional[dict]) -> bool:
     if not map_data:
         return False
 
-    changed = False
-
     if map_data.get("center"):
         center = map_data["center"]
         st.session_state.map_center = [center["lat"], center["lng"]]
-
     if map_data.get("zoom"):
         st.session_state.map_zoom = map_data["zoom"]
 
     clicked = map_data.get("last_clicked")
     if not clicked:
-        return changed
+        return False
 
     click_key = f"{round(clicked['lat'], 6)}_{round(clicked['lng'], 6)}"
     if click_key == st.session_state.last_click_key:
-        return changed
+        return False
 
     st.session_state.last_click_key = click_key
     point = {"lat": clicked["lat"], "lon": clicked["lng"]}
@@ -295,8 +271,7 @@ def process_click(map_data: Optional[dict]) -> bool:
         st.session_state.origin_point = point
         st.session_state.destination_point = None
 
-    changed = True
-    return changed
+    return True
 
 
 def render_sidebar() -> None:
@@ -306,11 +281,11 @@ def render_sidebar() -> None:
         st.session_state.origin_point = None
         st.session_state.destination_point = None
         st.session_state.last_click_key = None
+        st.session_state.highlight_routes = []
         st.rerun()
 
     st.sidebar.markdown("### Map image")
     st.sidebar.caption(str(MAP_IMAGE))
-
     st.sidebar.markdown("### Bounds")
     st.sidebar.code(str(MAP_BOUNDS))
 
@@ -352,24 +327,19 @@ def render_result(trip_result: Optional[dict]) -> None:
 
 
 def render_footer() -> None:
-    footer_items = []
-
+    items = []
     if st.session_state.origin_point:
-        footer_items.append(
-            "Origin: "
-            f"{st.session_state.origin_point['lat']:.5f}, "
+        items.append(
+            f"Origin: {st.session_state.origin_point['lat']:.5f}, "
             f"{st.session_state.origin_point['lon']:.5f}"
         )
-
     if st.session_state.destination_point:
-        footer_items.append(
-            "Destination: "
-            f"{st.session_state.destination_point['lat']:.5f}, "
+        items.append(
+            f"Destination: {st.session_state.destination_point['lat']:.5f}, "
             f"{st.session_state.destination_point['lon']:.5f}"
         )
-
-    if footer_items:
-        st.caption(" | ".join(footer_items))
+    if items:
+        st.caption(" | ".join(items))
 
 
 def main() -> None:
@@ -377,7 +347,7 @@ def main() -> None:
     render_sidebar()
 
     try:
-        routes_geojson = load_routes()
+        routes_geojson = load_routes(ROUTES_FILE)   # FIX 2: pass path for mtime hash
     except Exception as e:
         st.error(f"Failed to load route file: {e}")
         return
@@ -387,9 +357,15 @@ def main() -> None:
         st.error("No route points found in assets/bus_lines.geojson.")
         return
 
-    # Build initial map without highlights first
-    map_obj = build_map(routes_geojson, [])
+    trip_result, highlight_routes = compute_trip_result(route_points_df)
 
+    # FIX 3: only rerun when highlights actually change, avoiding an extra render
+    if highlight_routes != st.session_state.highlight_routes:
+        st.session_state.highlight_routes = highlight_routes
+        st.rerun()
+
+    # FIX 4: single map render — no more double st_folium call
+    map_obj = build_map(routes_geojson, st.session_state.highlight_routes)
     map_data = st_folium(
         map_obj,
         height=700,
@@ -398,22 +374,8 @@ def main() -> None:
         key="passenger_map",
     )
 
-    changed = process_click(map_data)
-    if changed:
+    if process_click(map_data):
         st.rerun()
-
-    trip_result, highlight_routes = compute_trip_result(route_points_df)
-
-    # Rebuild with highlighted routes once trip is known
-    if highlight_routes:
-        map_obj_highlighted = build_map(routes_geojson, highlight_routes)
-        st_folium(
-            map_obj_highlighted,
-            height=700,
-            width=1200,
-            returned_objects=[],
-            key="passenger_map_highlighted",
-        )
 
     render_result(trip_result)
     render_footer()
