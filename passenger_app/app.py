@@ -33,9 +33,10 @@ st.set_page_config(
     initial_sidebar_state="collapsed",   # hide sidebar completely
 )
 
-# ── Kill ALL Streamlit chrome so the map is truly fullscreen ─────────────────
+# ── Kill ALL Streamlit chrome — map iframe pinned to 100 % viewport ──────────
 st.markdown("""
 <style>
+  html, body { overflow: hidden !important; height: 100vh !important; }
   #root > div:first-child { height: 100vh; overflow: hidden; }
   .block-container { padding: 0 !important; margin: 0 !important;
                      max-width: 100% !important; }
@@ -43,8 +44,14 @@ st.markdown("""
   section[data-testid="stSidebar"] { display: none !important; }
   footer                           { display: none !important; }
   .stDeployButton                  { display: none !important; }
-  /* hide the relay text input */
   div[data-testid="stTextInput"]   { display: none !important; }
+  /* pin the first (map) iframe to fill the whole viewport */
+  div[data-testid="stCustomComponentV1"]:first-of-type > iframe {
+    position: fixed !important;
+    top: 0 !important; left: 0 !important;
+    width: 100vw !important; height: 100vh !important;
+    border: none !important; z-index: 1 !important;
+  }
 </style>
 """, unsafe_allow_html=True)
 
@@ -170,12 +177,18 @@ def trip_result_json(trip_result) -> str:
     o = trip_result["origin_route"]
     d = trip_result["destination_route"]
     same = o["route_name"] == d["route_name"]
+    o_color = ROUTE_COLORS.get(o["route_name"], "#888")
+    d_color = ROUTE_COLORS.get(d["route_name"], "#888")
     return json.dumps({
-        "origin_route":      o["route_name"],
-        "origin_walk_m":     round(o["distance_km"] * 1000),
-        "dest_route":        d["route_name"],
-        "dest_walk_m":       round(d["distance_km"] * 1000),
-        "same_route":        same,
+        "origin_route":   o["route_name"],
+        "origin_label":   o["route_name"].replace("_", " "),
+        "origin_color":   o_color,
+        "origin_walk_m":  round(o["distance_km"] * 1000),
+        "dest_route":     d["route_name"],
+        "dest_label":     d["route_name"].replace("_", " "),
+        "dest_color":     d_color,
+        "dest_walk_m":    round(d["distance_km"] * 1000),
+        "same_route":     same,
     })
 
 
@@ -339,61 +352,66 @@ html, body, #map {{ width:100%; height:100%; font-family: var(--font); }}
 ═══════════════════════════════════════════ */
 #result-card {{
   position: absolute;
-  bottom: 24px;
+  bottom: 20px;
   left: 50%;
-  transform: translateX(-50%) translateY(120px);
+  transform: translateX(-50%) translateY(300px);
   z-index: 1000;
   width: min(480px, 92vw);
-  padding: 16px 18px;
-  transition: transform .35s cubic-bezier(.34,1.56,.64,1);
+  padding: 14px 16px;
+  transition: transform .4s cubic-bezier(.34,1.56,.64,1);
   pointer-events: none;
 }}
 #result-card.visible {{
   transform: translateX(-50%) translateY(0);
   pointer-events: all;
 }}
-#result-inner {{ display: flex; flex-direction: column; gap: 10px; }}
 
-.result-row {{
-  display: flex;
-  align-items: center;
-  gap: 10px;
+.result-summary {{
   font-size: 13px;
-}}
-.result-line-badge {{
-  font-size: 11px;
   font-weight: 700;
-  padding: 3px 10px;
-  border-radius: 20px;
-  white-space: nowrap;
-  flex-shrink: 0;
-}}
-.result-walk {{
-  font-size: 11px;
-  color: var(--muted);
-  white-space: nowrap;
-}}
-.result-advice {{
-  font-size: 14px;
-  font-weight: 600;
-  padding: 8px 12px;
-  border-radius: 9px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  margin-bottom: 10px;
   text-align: center;
+  letter-spacing: .02em;
 }}
-.result-advice.success {{
+.result-summary.success {{
   background: rgba(34,197,94,.15);
   border: 1px solid rgba(34,197,94,.3);
   color: #4ade80;
 }}
-.result-advice.transfer {{
+.result-summary.transfer {{
   background: rgba(251,191,36,.12);
   border: 1px solid rgba(251,191,36,.3);
   color: #fbbf24;
 }}
-.result-advice.error {{
+.result-summary.error {{
   background: rgba(239,68,68,.13);
   border: 1px solid rgba(239,68,68,.3);
   color: #f87171;
+}}
+
+.steps {{ display: flex; flex-direction: column; gap: 6px; }}
+.step {{
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  background: rgba(255,255,255,0.05);
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.07);
+}}
+.step-icon {{ font-size: 16px; flex-shrink: 0; line-height: 1.4; }}
+.step-body {{ display: flex; flex-direction: column; gap: 2px; min-width: 0; }}
+.step-main {{ font-size: 13px; color: var(--text); font-weight: 500; }}
+.step-sub  {{ font-size: 11px; color: var(--muted); }}
+.line-pill {{
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 8px;
+  border-radius: 12px;
+  white-space: nowrap;
 }}
 
 /* ═══════════════════════════════════════════
@@ -670,36 +688,60 @@ function showResult(r) {{
   if (!r) {{ card.classList.remove('visible'); return; }}
 
   if (r.error) {{
-    inner.innerHTML = `<div class="result-advice error">⚠ ${{r.error}}</div>`;
+    inner.innerHTML = `<div class="result-advice error">⚠️  ${{r.error}}</div>`;
     card.classList.add('visible');
     return;
   }}
 
-  const oColor = COLORS[r.origin_route] || '#888';
-  const dColor = COLORS[r.dest_route]   || '#888';
+  const steps = [];
 
-  inner.innerHTML = `
-    <div class="result-row">
-      <span style="color:#94a3b8;font-size:12px;width:24px;flex-shrink:0">From</span>
-      <span class="result-line-badge" style="background:${{oColor}}22;color:${{oColor}};border:1px solid ${{oColor}}44">
-        ${{r.origin_route.replace(/_/g,' ')}}
-      </span>
-      <span class="result-walk">🚶 ${{r.origin_walk_m}} m walk</span>
-    </div>
-    ${{!r.same_route ? `
-    <div class="result-row">
-      <span style="color:#94a3b8;font-size:12px;width:24px;flex-shrink:0">To</span>
-      <span class="result-line-badge" style="background:${{dColor}}22;color:${{dColor}};border:1px solid ${{dColor}}44">
-        ${{r.dest_route.replace(/_/g,' ')}}
-      </span>
-      <span class="result-walk">🚶 ${{r.dest_walk_m}} m walk</span>
-    </div>` : ''}}
-    <div class="result-advice ${{r.same_route ? 'success' : 'transfer'}}">
-      ${{r.same_route
-        ? `✅ Take <strong>${{r.origin_route.replace(/_/g,' ')}}</strong> — no transfer needed`
-        : `🔁 Board <strong>${{r.origin_route.replace(/_/g,' ')}}</strong>, transfer to <strong>${{r.dest_route.replace(/_/g,' ')}}</strong>`
-      }}
-    </div>`;
+  // Step 1: walk to origin bus stop
+  steps.push(`
+    <div class="step">
+      <div class="step-icon">🚶</div>
+      <div class="step-body">
+        <div class="step-main">Walk <strong>${{r.origin_walk_m}} m</strong> to the nearest stop</div>
+        <div class="step-sub">on <span class="line-pill" style="background:${{r.origin_color}}22;color:${{r.origin_color}};border:1px solid ${{r.origin_color}}55">${{r.origin_label}}</span></div>
+      </div>
+    </div>`);
+
+  // Step 2: board the bus
+  steps.push(`
+    <div class="step">
+      <div class="step-icon">🚌</div>
+      <div class="step-body">
+        <div class="step-main">Board <span class="line-pill" style="background:${{r.origin_color}}22;color:${{r.origin_color}};border:1px solid ${{r.origin_color}}55">${{r.origin_label}}</span></div>
+        <div class="step-sub">${{r.same_route ? 'Ride to your destination stop' : 'Ride to the transfer stop'}}</div>
+      </div>
+    </div>`);
+
+  // Step 3: transfer if needed
+  if (!r.same_route) {{
+    steps.push(`
+      <div class="step">
+        <div class="step-icon">🔁</div>
+        <div class="step-body">
+          <div class="step-main">Transfer to <span class="line-pill" style="background:${{r.dest_color}}22;color:${{r.dest_color}};border:1px solid ${{r.dest_color}}55">${{r.dest_label}}</span></div>
+          <div class="step-sub">at the intersection of both routes</div>
+        </div>
+      </div>`);
+  }}
+
+  // Step 4: walk to destination
+  steps.push(`
+    <div class="step">
+      <div class="step-icon">📍</div>
+      <div class="step-body">
+        <div class="step-main">Walk <strong>${{r.dest_walk_m}} m</strong> to your destination</div>
+        <div class="step-sub">You've arrived!</div>
+      </div>
+    </div>`);
+
+  const summary = r.same_route
+    ? `<div class="result-summary success">✅ Direct route — no transfer needed</div>`
+    : `<div class="result-summary transfer">🔁 1 transfer required</div>`;
+
+  inner.innerHTML = summary + `<div class="steps">${{steps.join('')}}</div>`;
   card.classList.add('visible');
 }}
 
@@ -826,9 +868,10 @@ def main():
         st.error("No route points found in bus_lines.geojson."); return
 
     trip_result, highlight_routes = compute_trip(route_points_df)
-    if highlight_routes != st.session_state.highlight_routes:
+    # Only update highlights when they actually change — avoid infinite rerun loop
+    if set(highlight_routes) != set(st.session_state.highlight_routes):
         st.session_state.highlight_routes = highlight_routes
-        st.rerun()
+        # Don't rerun here — pass highlights directly to the map below
 
     live_buses = fetch_live_buses()
     supa_url   = st.secrets.get("SUPABASE_URL", "")   if hasattr(st, "secrets") else ""
@@ -837,7 +880,7 @@ def main():
     # ── Fullscreen map (100 vh) ───────────────────────────────────────────────
     html = build_map_html(
         routes_geojson,
-        st.session_state.highlight_routes,
+        highlight_routes,                  # use freshly computed, not stale session value
         st.session_state.origin,
         st.session_state.destination,
         trip_result,
@@ -845,7 +888,7 @@ def main():
         supa_url,
         supa_key,
     )
-    components.html(html, height=800, scrolling=False)
+    components.html(html, height=10, scrolling=False)   # CSS pins it to 100vh
 
     # ── postMessage relay ─────────────────────────────────────────────────────
     relay_js = """
