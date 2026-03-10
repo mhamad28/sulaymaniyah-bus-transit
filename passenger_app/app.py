@@ -33,24 +33,24 @@ st.set_page_config(
     initial_sidebar_state="collapsed",   # hide sidebar completely
 )
 
-# ── Kill ALL Streamlit chrome — map iframe pinned to 100 % viewport ──────────
+# ── Kill ALL Streamlit chrome — simple reliable fullscreen ───────────────────
 st.markdown("""
 <style>
-  html, body { overflow: hidden !important; height: 100vh !important; }
-  #root > div:first-child { height: 100vh; overflow: hidden; }
-  .block-container { padding: 0 !important; margin: 0 !important;
-                     max-width: 100% !important; }
   header[data-testid="stHeader"]   { display: none !important; }
   section[data-testid="stSidebar"] { display: none !important; }
   footer                           { display: none !important; }
   .stDeployButton                  { display: none !important; }
   div[data-testid="stTextInput"]   { display: none !important; }
-  /* pin the first (map) iframe to fill the whole viewport */
-  div[data-testid="stCustomComponentV1"]:first-of-type > iframe {
-    position: fixed !important;
-    top: 0 !important; left: 0 !important;
-    width: 100vw !important; height: 100vh !important;
-    border: none !important; z-index: 1 !important;
+  .block-container {
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: 100% !important;
+  }
+  /* Remove all spacing around the iframe */
+  div[data-testid="stCustomComponentV1"] {
+    margin: 0 !important;
+    padding: 0 !important;
+    line-height: 0 !important;
   }
 </style>
 """, unsafe_allow_html=True)
@@ -233,7 +233,8 @@ def build_map_html(routes_geojson: dict, highlight: List[str],
   --font: 'Inter', system-ui, sans-serif;
 }}
 * {{ margin:0; padding:0; box-sizing:border-box; }}
-html, body, #map {{ width:100%; height:100%; font-family: var(--font); }}
+html, body {{ width:100%; height:100%; font-family: var(--font); overflow:hidden; }}
+#map {{ width:100%; height:100vh; }}
 
 /* ── glass card mixin ── */
 .card {{
@@ -841,6 +842,14 @@ if (INIT_DEST) {{
   i.value = INIT_DEST.lat.toFixed(6) + ', ' + INIT_DEST.lon.toFixed(6);
   i.classList.add('has-val');
 }}
+
+// Tell parent to resize this iframe to fill the viewport
+function resizeIframe() {{
+  const h = window.innerHeight || document.documentElement.clientHeight || 900;
+  window.parent.postMessage({{ type: 'resize_map', height: h }}, '*');
+}}
+resizeIframe();
+window.addEventListener('resize', resizeIframe);
 </script>
 </body>
 </html>"""
@@ -888,13 +897,30 @@ def main():
         supa_url,
         supa_key,
     )
-    components.html(html, height=10, scrolling=False)   # CSS pins it to 100vh
+    components.html(html, height=900, scrolling=False)
 
     # ── postMessage relay ─────────────────────────────────────────────────────
     relay_js = """
     <script>
     window.addEventListener('message', function(e) {
-        if (!e.data || e.data.type !== 'map_action') return;
+        if (!e.data) return;
+
+        // Resize the map iframe to fill viewport
+        if (e.data.type === 'resize_map') {
+            const iframes = window.parent.document.querySelectorAll('iframe');
+            iframes.forEach(function(f) {
+                // target the map iframe (the large one)
+                if (f.getAttribute('height') && parseInt(f.getAttribute('height')) > 100) {
+                    const h = e.data.height;
+                    f.style.height = h + 'px';
+                    f.style.minHeight = h + 'px';
+                    f.setAttribute('height', h);
+                }
+            });
+            return;
+        }
+
+        if (e.data.type !== 'map_action') return;
         const raw = e.data.payload.raw;
         const inputs = window.parent.document.querySelectorAll(
             'input[data-testid="stTextInput"] input');
