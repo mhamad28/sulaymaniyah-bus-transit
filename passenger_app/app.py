@@ -586,22 +586,29 @@ L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
   maxZoom: 19,
 }}).addTo(map);
 
-// ── Routes ────────────────────────────────────────────────────────────────────
-L.geoJSON(geojson, {{
-  style: f => {{
-    const n = (f.properties && f.properties.layer) || '';
-    const c = COLORS[n] || '#3388ff';
-    if (HIGHLIGHT.size > 0) {{
-      const active = HIGHLIGHT.has(n);
-      return {{ color: c, weight: active ? 6 : 2, opacity: active ? 0.95 : 0.18 }};
+// ── Routes — managed via updateRouteHighlight() ───────────────────────────────
+let activeHighlight = new Set();
+// Initial draw with no highlights; replaced whenever points change
+function updateRouteHighlight(names) {{
+  activeHighlight = new Set(names);
+  if (window._routeLayer) map.removeLayer(window._routeLayer);
+  window._routeLayer = L.geoJSON(geojson, {{
+    style: f => {{
+      const n = (f.properties && f.properties.layer) || '';
+      const c = COLORS[n] || '#3388ff';
+      if (activeHighlight.size > 0) {{
+        const active = activeHighlight.has(n);
+        return {{ color: c, weight: active ? 7 : 2, opacity: active ? 1.0 : 0.15 }};
+      }}
+      return {{ color: c, weight: 4, opacity: 0.88 }};
+    }},
+    onEachFeature: (f, l) => {{
+      const n = (f.properties && f.properties.layer) || 'Route';
+      l.bindTooltip(n, {{ sticky: true }});
     }}
-    return {{ color: c, weight: 4, opacity: 0.88 }};
-  }},
-  onEachFeature: (f, l) => {{
-    const n = (f.properties && f.properties.layer) || 'Route';
-    l.bindTooltip(n, {{ sticky: true }});
-  }}
-}}).addTo(map);
+  }}).addTo(map);
+}}
+updateRouteHighlight([]);
 
 // ── Legend ────────────────────────────────────────────────────────────────────
 const legendPanel = document.getElementById('legend-panel');
@@ -637,6 +644,7 @@ function setDestMarker(lat, lon) {{
 
 if (INIT_ORIGIN) setOriginMarker(INIT_ORIGIN.lat, INIT_ORIGIN.lon);
 if (INIT_DEST)   setDestMarker(INIT_DEST.lat,   INIT_DEST.lon);
+if (jsOrigin && jsDest) computeAndShow();
 
 // ── Live buses ────────────────────────────────────────────────────────────────
 const busMarkers = {{}};
@@ -746,7 +754,87 @@ function showResult(r) {{
   card.classList.add('visible');
 }}
 
-showResult(INIT_RESULT);
+// ── JS Routing engine (runs entirely in browser, no Streamlit rerun needed) ──
+// Extract all route points from the geojson once at startup
+const ROUTE_POINTS = [];   // {{lat, lon, name}}
+const MAX_WALK_KM  = {MAX_WALK_KM};
+
+(function buildRoutePoints() {{
+  for (const feature of geojson.features || []) {{
+    const name = (feature.properties && feature.properties.layer) || 'Unknown';
+    const geom = feature.geometry || {{}};
+    const type = geom.type;
+    const coords = geom.coordinates || [];
+    const lines = type === 'LineString' ? [coords]
+                : type === 'MultiLineString' ? coords : [];
+    for (const line of lines) {{
+      for (const coord of line) {{
+        if (Array.isArray(coord) && coord.length >= 2) {{
+          ROUTE_POINTS.push({{ lat: coord[1], lon: coord[0], name }});
+        }}
+      }}
+    }}
+  }}
+}})();
+
+function haversineKm(lat1, lon1, lat2, lon2) {{
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2
+    + Math.cos(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180)
+    * Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}}
+
+function nearestRoute(lat, lon) {{
+  let best = null, bestDist = Infinity;
+  for (const p of ROUTE_POINTS) {{
+    const d = haversineKm(lat, lon, p.lat, p.lon);
+    if (d < bestDist) {{ bestDist = d; best = p; }}
+  }}
+  return best ? {{ name: best.name, distKm: bestDist }} : null;
+}}
+
+// Current origin/dest state (managed fully in JS)
+let jsOrigin = INIT_ORIGIN ? {{ lat: INIT_ORIGIN.lat, lon: INIT_ORIGIN.lon }} : null;
+let jsDest   = INIT_DEST   ? {{ lat: INIT_DEST.lat,   lon: INIT_DEST.lon   }} : null;
+
+function computeAndShow() {{
+  if (!jsOrigin || !jsDest) {{ showResult(null); return; }}
+
+  const oRoute = nearestRoute(jsOrigin.lat, jsOrigin.lon);
+  const dRoute = nearestRoute(jsDest.lat,   jsDest.lon);
+
+  if (!oRoute || !dRoute) {{
+    showResult({{ error: 'Could not find nearby routes.' }}); return;
+  }}
+  if (oRoute.distKm > MAX_WALK_KM) {{
+    showResult({{ error: `Origin is ${{(oRoute.distKm * 1000).toFixed(0)}} m from the nearest bus route — too far to walk (${{(MAX_WALK_KM*1000).toFixed(0)}} m max).` }}); return;
+  }}
+  if (dRoute.distKm > MAX_WALK_KM) {{
+    showResult({{ error: `Destination is ${{(dRoute.distKm * 1000).toFixed(0)}} m from the nearest bus route — too far to walk (${{(MAX_WALK_KM*1000).toFixed(0)}} m max).` }}); return;
+  }}
+
+  const same = oRoute.name === dRoute.name;
+  const oColor = COLORS[oRoute.name] || '#888';
+  const dColor = COLORS[dRoute.name] || '#888';
+
+  // Highlight the relevant routes on the map
+  updateRouteHighlight(same ? [oRoute.name] : [oRoute.name, dRoute.name]);
+
+  showResult({{
+    origin_route:  oRoute.name,
+    origin_label:  oRoute.name.replace(/_/g, ' '),
+    origin_color:  oColor,
+    origin_walk_m: Math.round(oRoute.distKm * 1000),
+    dest_route:    dRoute.name,
+    dest_label:    dRoute.name.replace(/_/g, ' '),
+    dest_color:    dColor,
+    dest_walk_m:   Math.round(dRoute.distKm * 1000),
+    same_route:    same,
+  }});
+}}
 
 // ── Click / manual input mode ─────────────────────────────────────────────────
 let mode = 'idle';
@@ -769,11 +857,19 @@ map.on('click', e => {{
   inp.value = lat.toFixed(6) + ', ' + lon.toFixed(6);
   inp.classList.add('has-val');
 
-  // Update marker immediately
-  if (type === 'set_origin') setOriginMarker(lat, lon);
-  else                       setDestMarker(lat, lon);
+  // Update marker + JS state
+  if (type === 'set_origin') {{
+    setOriginMarker(lat, lon);
+    jsOrigin = {{ lat, lon }};
+  }} else {{
+    setDestMarker(lat, lon);
+    jsDest = {{ lat, lon }};
+  }}
 
-  // Relay to Streamlit
+  // Compute route instantly — no rerun needed
+  computeAndShow();
+
+  // Relay to Streamlit (for session state persistence only)
   postAction(type, lat, lon);
 
   // Auto-advance origin → destination
@@ -789,9 +885,17 @@ function applyManual(type, raw) {{
   if (parts.length !== 2) return;
   const lat = parseFloat(parts[0]), lon = parseFloat(parts[1]);
   if (isNaN(lat) || isNaN(lon)) return;
-  if (type === 'origin') {{ setOriginMarker(lat, lon); postAction('set_origin', lat, lon); }}
-  else                   {{ setDestMarker(lat, lon);   postAction('set_destination', lat, lon); }}
+  if (type === 'origin') {{
+    setOriginMarker(lat, lon);
+    jsOrigin = {{ lat, lon }};
+    postAction('set_origin', lat, lon);
+  }} else {{
+    setDestMarker(lat, lon);
+    jsDest = {{ lat, lon }};
+    postAction('set_destination', lat, lon);
+  }}
   map.setView([lat, lon], map.getZoom());
+  computeAndShow();
 }}
 
 function clearPoint(type) {{
@@ -799,12 +903,15 @@ function clearPoint(type) {{
     if (originMarker) {{ map.removeLayer(originMarker); originMarker = null; }}
     document.getElementById('input-origin').value = '';
     document.getElementById('input-origin').classList.remove('has-val');
+    jsOrigin = null;
   }} else {{
     if (destMarker) {{ map.removeLayer(destMarker); destMarker = null; }}
     document.getElementById('input-dest').value = '';
     document.getElementById('input-dest').classList.remove('has-val');
+    jsDest = null;
   }}
   postAction('clear_' + type);
+  updateRouteHighlight([]);
   showResult(null);
 }}
 
@@ -815,10 +922,12 @@ function resetAll() {{
   document.getElementById('input-dest').value   = '';
   document.getElementById('input-origin').classList.remove('has-val');
   document.getElementById('input-dest').classList.remove('has-val');
+  jsOrigin = null; jsDest = null;
   mode = 'idle';
   document.getElementById('btn-origin').classList.remove('active');
   document.getElementById('btn-dest').classList.remove('active');
   map.getContainer().classList.remove('picking');
+  updateRouteHighlight([]);
   showResult(null);
   postAction('reset');
 }}
