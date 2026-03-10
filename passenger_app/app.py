@@ -1,6 +1,5 @@
-"""Offline passenger route planner for Suly Transit — optimised build."""
+"""Offline passenger route planner for Suly Transit."""
 
-import base64
 import json
 import math
 from pathlib import Path
@@ -20,16 +19,10 @@ BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parent
 ASSETS_DIR = PROJECT_ROOT / "assets"
 ROUTES_FILE = ASSETS_DIR / "bus_lines.geojson"
-MAP_IMAGE = ASSETS_DIR / "sulaymaniyah_map.png"
 
 DEFAULT_CENTER = [35.56, 45.43]
 DEFAULT_ZOOM = 13
 MAX_WALK_KM = 0.70
-
-MAP_BOUNDS = [
-    [35.50, 45.35],
-    [35.62, 45.52],
-]
 
 ROUTE_COLORS: Dict[str, str] = {
     "Bakrajo_Bazar": "#e41a1c",
@@ -48,14 +41,6 @@ ROUTE_COLORS: Dict[str, str] = {
 }
 
 
-# ── FIX 1: cache the base64 encoding so the PNG is only read & encoded once ──
-@st.cache_data
-def image_to_data_url(image_path: Path) -> str:
-    encoded = base64.b64encode(image_path.read_bytes()).decode("utf-8")
-    return f"data:image/png;base64,{encoded}"
-
-
-# ── FIX 2: cache on file mtime so we only re-read when the file actually changes ──
 @st.cache_data(hash_funcs={Path: lambda p: p.stat().st_mtime if p.exists() else 0})
 def load_routes(path: Path) -> dict:
     if not path.exists():
@@ -132,36 +117,21 @@ def init_state() -> None:
     st.session_state.setdefault("last_click_key", None)
     st.session_state.setdefault("map_center", DEFAULT_CENTER)
     st.session_state.setdefault("map_zoom", DEFAULT_ZOOM)
-    # FIX 3: track highlight state so we only trigger rerun when it changes
     st.session_state.setdefault("highlight_routes", [])
 
 
-# ── FIX 4: build the whole GeoJSON layer in ONE folium.GeoJson call ──────────
-#   Passing a style_function that inspects `feature["properties"]["layer"]` is
-#   much faster than iterating Python-side and adding N separate GeoJson objects.
 def build_map(routes_geojson: dict, highlight_routes: List[str]) -> folium.Map:
+    # OSM tiles: crisp at every zoom level, zero app weight, no PNG needed
     m = folium.Map(
         location=st.session_state.map_center,
         zoom_start=st.session_state.map_zoom,
+        tiles="OpenStreetMap",
         min_zoom=11,
-        max_zoom=16,
-        tiles=None,
+        max_zoom=19,
         control_scale=True,
         zoom_control=True,
         max_bounds=True,
     )
-
-    if MAP_IMAGE.exists():
-        folium.raster_layers.ImageOverlay(
-            image=image_to_data_url(MAP_IMAGE),   # already cached
-            bounds=MAP_BOUNDS,
-            opacity=1.0,
-            interactive=False,
-            cross_origin=False,
-            zindex=1,
-        ).add_to(m)
-    else:
-        st.warning(f"Map image not found: {MAP_IMAGE}")
 
     highlight_set = set(highlight_routes)
 
@@ -172,9 +142,9 @@ def build_map(routes_geojson: dict, highlight_routes: List[str]) -> folium.Map:
             active = name in highlight_set
             return {"color": color, "weight": 6 if active else 2,
                     "opacity": 0.95 if active else 0.18}
-        return {"color": color, "weight": 3, "opacity": 0.85}
+        return {"color": color, "weight": 4, "opacity": 0.9}
 
-    # Single GeoJson call for the entire FeatureCollection
+    # Single GeoJson call for the entire FeatureCollection — much faster
     folium.GeoJson(
         routes_geojson,
         tooltip=folium.GeoJsonTooltip(fields=["layer"], aliases=["Route:"]),
@@ -284,17 +254,22 @@ def render_sidebar() -> None:
         st.session_state.highlight_routes = []
         st.rerun()
 
-    st.sidebar.markdown("### Map image")
-    st.sidebar.caption(str(MAP_IMAGE))
-    st.sidebar.markdown("### Bounds")
-    st.sidebar.code(str(MAP_BOUNDS))
-
     if st.session_state.origin_point is None:
         st.sidebar.info("Click the map to set origin.")
     elif st.session_state.destination_point is None:
         st.sidebar.info("Click the map again to set destination.")
     else:
         st.sidebar.success("Trip selected. Click again to start a new trip.")
+
+    # Route colour legend
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### Bus Lines")
+    for route, color in ROUTE_COLORS.items():
+        st.sidebar.markdown(
+            f'<span style="color:{color}; font-size:18px;">●</span> '
+            f'{route.replace("_", " ")}',
+            unsafe_allow_html=True,
+        )
 
 
 def render_result(trip_result: Optional[dict]) -> None:
@@ -312,17 +287,17 @@ def render_result(trip_result: Optional[dict]) -> None:
     st.subheader("Route Advice")
     st.write(
         f"Origin nearest: **{origin_route['route_name']}** "
-        f"({origin_route['distance_km']:.2f} km) | "
+        f"({origin_route['distance_km']:.2f} km walk) | "
         f"Destination nearest: **{destination_route['route_name']}** "
-        f"({destination_route['distance_km']:.2f} km)"
+        f"({destination_route['distance_km']:.2f} km walk)"
     )
 
     if origin_route["route_name"] == destination_route["route_name"]:
-        st.success(f"Take this bus line: {origin_route['route_name']}")
+        st.success(f"✅ Take this bus line: **{origin_route['route_name']}**")
     else:
         st.warning(
-            f"Take **{origin_route['route_name']}** first, then transfer to "
-            f"**{destination_route['route_name']}**."
+            f"🔁 Take **{origin_route['route_name']}** first, "
+            f"then transfer to **{destination_route['route_name']}**."
         )
 
 
@@ -347,7 +322,7 @@ def main() -> None:
     render_sidebar()
 
     try:
-        routes_geojson = load_routes(ROUTES_FILE)   # FIX 2: pass path for mtime hash
+        routes_geojson = load_routes(ROUTES_FILE)
     except Exception as e:
         st.error(f"Failed to load route file: {e}")
         return
@@ -359,12 +334,12 @@ def main() -> None:
 
     trip_result, highlight_routes = compute_trip_result(route_points_df)
 
-    # FIX 3: only rerun when highlights actually change, avoiding an extra render
+    # Only rerun when highlights actually change
     if highlight_routes != st.session_state.highlight_routes:
         st.session_state.highlight_routes = highlight_routes
         st.rerun()
 
-    # FIX 4: single map render — no more double st_folium call
+    # Single map render with live OSM tiles
     map_obj = build_map(routes_geojson, st.session_state.highlight_routes)
     map_data = st_folium(
         map_obj,
