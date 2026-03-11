@@ -624,10 +624,10 @@ function compute() {{
     const alts  = directs.filter(r=>r.name!==best.name);
 
     // Board point marker on origin route
-    _dropMarker = pulseMarker(best.boardPt.lat, best.boardPt.lon, '#22c55e', 'لێرە سوار ببە');
+    _dropMarker = pulseMarker(best.boardPt.lat, best.boardPt.lon, '#22c55e', 'سەر پاسەکە کەوە');
     // Drop-off point marker on destination side
     const dropPt = nearestOnRoute(ptD.lat, ptD.lon, best.name).pt;
-    _boardMarker = pulseMarker(dropPt.lat, dropPt.lon, '#22c55e', 'پێی بڵێ لێرە دابەزێنت');
+    _boardMarker = pulseMarker(dropPt.lat, dropPt.lon, '#22c55e', 'بڵێ: دابەزین هەیە');
 
     drawRoutes(new Set(directs.map(r=>r.name)));
     showDirect({{
@@ -666,11 +666,11 @@ function compute() {{
 
     // Drop-off circle on line A (pulsing yellow)
     _dropMarker = pulseMarker(app.ptA.lat, app.ptA.lon, '#fbbf24',
-      'پێی بڵێ لێرە دابەزێنت — شوێنی گۆڕین');
+      'بڵێ: دابەزین هەیە — شوێنی گۆڕین');
 
     // Board circle on line B (pulsing blue)
     _boardMarker = pulseMarker(app.ptB.lat, app.ptB.lon, '#60a5fa',
-      'لێرە سوار ببە '+rD.name.replace(/_/g,' '));
+      'سەر پاسی '+rD.name.replace(/_/g,' ')+' کەوە');
 
     // Dashed walking line between them (only if gap > ~10m)
     if(!sameRoad && app.gapKm>0.01) {{
@@ -751,13 +751,13 @@ function compute() {{
 
     // Green dot = board Line A
     _dropMarker  = pulseMarker(rO.boardPt.lat, rO.boardPt.lon, '#22c55e',
-      'لێرە سوار ببە '+rO.name.replace(/_/g,' '));
+      'سەر پاسی '+rO.name.replace(/_/g,' ')+' کەوە');
     // Yellow dot = drop off at Bazaar from Line A
     _boardMarker = pulseMarker(bzA.lat, bzA.lon, '#fbbf24',
-      'پێی بڵێ: بازاڕ — لەمجا دابەزە');
+      'پاسەکە لە بازاڕ دەوەستێت بە خۆی');
     // Blue dot = board Line B at Bazaar
     _walkLine    = pulseMarker(bzB.lat, bzB.lon, '#60a5fa',
-      'لێرە سوار ببە '+rD.name.replace(/_/g,' '));
+      'سەر پاسی '+rD.name.replace(/_/g,' ')+' کەوە');
     // Dashed walk between the two Bazaar points
     if(bazaarWalk>0.01) {{
       _walkLine2 = L.polyline(
@@ -830,16 +830,16 @@ function showDirect(r) {{
     `<div class="summary ok">✅ ڕاستەوخۆ — گۆڕین پێویست نیە</div>`+
     `<div class="steps">`+
       step('🚶',
-        `پیاسە بکە <strong>${{r.walkO_m}} م</strong> بۆ کنارەی شەقام`,
+        `پێویستە <strong>${{r.walkO_m}} م</strong> بە پێ بڕۆی`,
         `بڕۆ بۆ شەقامی بەسی <strong>${{r.labelO}}</strong> `+altHtml)+
       step('🚌',
-        `دەستت بەرز بکە — سوار ببە <strong>${{r.labelO}}</strong>`,
+        `دەست ڕاگرە لە پاسەکە`,
         `شوفێر دەوەستێت ئەگەر ڕێگا هەبێت`)+
       step('🗣️',
-        `پێی بڵێ کوێ دادەبەزیت`,
-        `ناوی شوێنەکە بڵێ یان بیشارەوە لەسەر نەخشەکە — خاڵی زەرد شوێنی دابەزینە`)+
+        `بڵێ: <em>"دابەزین هەیە"</em>`,
+        `ناوی شوێنەکە بڵێ یان بیشارەوە لەسەر نەخشەکە`)+
       step('🚶',
-        `پیاسە بکە <strong>${{r.walkD_m}} م</strong> بۆ مەوداکەت`,
+        `پێویستە <strong>${{r.walkD_m}} م</strong> بە پێ بڕۆی بۆ مەوداکەت`,
         `گەیشتیت!`)+
     `</div>`;
   document.getElementById('result-card').classList.add('show');
@@ -848,19 +848,20 @@ function showDirect(r) {{
 function showTransfer(r) {{
   const xferLine = r.sameRoad
     ? `هەمان شەقام — پیاسەکردن پێویست نیە`
-    : `پیاسە بکە <strong>${{r.xferWalk_m}} م</strong> بۆ شەقامی <strong>${{r.viaBazaar?'بەسی دواتر':r.labelD}}</strong>`;
+    : `پێویستە <strong>${{r.xferWalk_m}} م</strong> بە پێ بڕۆی بۆ شەقامی <strong>${{r.viaBazaar?'پاسی دواتر':r.labelD}}</strong>`;
 
+  // At terminal endpoints (Bazaar) the bus stops by default — no need to ask
   const transferInstruction = r.viaBazaar
-    ? `پێی بڵێ: <em>"بازاڕ"</em> — لە تەرمیناڵی بازاڕ دابەزە`
-    : `پێی بڵێ: <em>"لە شەقامی ${{r.labelD}} دامبەزێنم"</em>`;
+    ? `پاسەکە لە بازاڕ دەوەستێت بە خۆی`
+    : `بڵێ: <em>"دابەزین هەیە"</em> — لە شەقامی ${{r.labelD}}`;
 
   const dropSub = r.viaBazaar
-    ? `🟡 خاڵی زەرد = دابەزین لە تەرمیناڵی بازاڕ`
-    : `🟡 خاڵی زەرد = شوێنی دابەزین / گۆڕین`;
+    ? `🟡 خاڵی زەرد = دابەزین لە بازاڕ — دەوەستێت بە خۆی`
+    : `🟡 خاڵی زەرد = شوێنی دابەزین`;
 
   const boardSub = r.viaBazaar
-    ? `🔵 خاڵی شین = سواربوون لە ${{r.labelD}} لە بازاڕ`
-    : `🔵 خاڵی شین = شوێنی سواربوون لە ${{r.labelD}}`;
+    ? `🔵 خاڵی شین = سەر پاسی ${{r.labelD}} کەوە لە بازاڕ`
+    : `🔵 خاڵی شین = شوێنی سەرکەوتن لە ${{r.labelD}}`;
 
   const header = r.viaBazaar
     ? `🔁 یەک گۆڕین — لە ڕێگای بازاڕ`
@@ -870,21 +871,21 @@ function showTransfer(r) {{
     `<div class="summary xfr">${{header}}</div>`+
     `<div class="steps">`+
       step('🚶',
-        `پیاسە بکە <strong>${{r.walkO_m}} م</strong> بۆ کنارەی شەقام`,
+        `پێویستە <strong>${{r.walkO_m}} م</strong> بە پێ بڕۆی بۆ کنارەی شەقام`,
         `بڕۆ بۆ شەقامی بەسی <strong>${{r.labelO}}</strong> — 🟢 خاڵی سەوز لەسەر نەخشەکە`)+
       step('🚌',
-        `دەستت بەرز بکە — سوار ببە <strong>${{r.labelO}}</strong>`,
+        `دەست ڕاگرە لە پاسەکە`,
         `شوفێر دەوەستێت ئەگەر ڕێگا هەبێت`)+
       step('🗣️', transferInstruction, dropSub)+
       step('🚶', xferLine, boardSub)+
       step('🚌',
-        `دەستت بەرز بکە — سوار ببە <strong>${{r.labelD}}</strong>`,
+        `دەست ڕاگرە لە پاسەکە — سەر پاسی <strong>${{r.labelD}}</strong> کەوە`,
         `شوفێر دەوەستێت ئەگەر ڕێگا هەبێت`)+
       step('🗣️',
-        `پێی بڵێ کوێ دادەبەزیت`,
+        `بڵێ: <em>"دابەزین هەیە"</em>`,
         `داوای وەستانی نزیک مەوداکەت بکە`)+
       step('🚶',
-        `پیاسە بکە <strong>${{r.walkD_m}} م</strong> بۆ مەوداکەت`,
+        `پێویستە <strong>${{r.walkD_m}} م</strong> بە پێ بڕۆی بۆ مەوداکەت`,
         `گەیشتیت!`)+
     `</div>`;
   document.getElementById('result-card').classList.add('show');
