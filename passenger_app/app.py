@@ -964,7 +964,7 @@ function showDirect(r) {{
 
     legRow(
       [{{type:'walk', label: r.walkO_m+'م'}}],
-      `بڕۆ بۆ پاسی <strong style="color:${{c}}">${{r.labelO}}</strong>`+altsHtml,
+      `بەپێ بڕۆ بۆ پاسی <strong style="color:${{c}}">${{r.labelO}}</strong>`+altsHtml,
       `پێویستە <strong>${{r.walkO_m}} م</strong> بە پێ بڕۆی — 🟢 خاڵی سەوز لەسەر نەخشەکە`
     )+
 
