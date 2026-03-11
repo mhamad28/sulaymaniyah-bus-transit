@@ -1328,12 +1328,9 @@ function useMyLocation() {{
 if(INIT_O) document.getElementById('inp-o').value=INIT_O.lat.toFixed(6)+', '+INIT_O.lon.toFixed(6);
 if(INIT_D) document.getElementById('inp-d').value=INIT_D.lat.toFixed(6)+', '+INIT_D.lon.toFixed(6);
 
-// ── postMessage to Streamlit (session persistence only) ───────────────────────
+// ── postMessage — only used for iframe resize, NOT for routing ────────────────
 function postPt(type,lat,lon) {{
-  let v=type;
-  if(lat!==undefined) v+=':'+lat.toFixed(6)+'_'+lon.toFixed(6);
-  v+='|'+Date.now();
-  window.parent.postMessage({{type:'map_action',payload:{{raw:v}}}},'*');
+  // No-op: routing is 100% client-side JS, no Streamlit rerun needed
 }}
 
 // ── Resize iframe to window height ────────────────────────────────────────────
@@ -1351,10 +1348,7 @@ window.addEventListener('resize', resize);
 # ── Session + relay ───────────────────────────────────────────────────────────
 
 def init_state():
-    st.session_state.setdefault("origin", None)
-    st.session_state.setdefault("destination", None)
-    st.session_state.setdefault("last_action", None)
-    st.session_state.setdefault("highlight_routes", [])
+    st.session_state.setdefault("_ready", True)
 
 
 def main():
@@ -1369,86 +1363,39 @@ def main():
     if route_points_df.empty:
         st.error("No route points found in bus_lines.geojson."); return
 
-    trip_result, highlight_routes = compute_trip(route_points_df)
-    # Only update highlights when they actually change — avoid infinite rerun loop
-    if set(highlight_routes) != set(st.session_state.highlight_routes):
-        st.session_state.highlight_routes = highlight_routes
-        # Don't rerun here — pass highlights directly to the map below
-
     live_buses = fetch_live_buses()
-    supa_url   = st.secrets.get("SUPABASE_URL", "")   if hasattr(st, "secrets") else ""
-    supa_key   = st.secrets.get("SUPABASE_ANON_KEY", "") if hasattr(st, "secrets") else ""
+    supa_url = st.secrets.get("SUPABASE_URL", "")     if hasattr(st, "secrets") else ""
+    supa_key = st.secrets.get("SUPABASE_ANON_KEY", "") if hasattr(st, "secrets") else ""
 
-    # ── Fullscreen map (100 vh) ───────────────────────────────────────────────
     html = build_map_html(
         routes_geojson,
-        highlight_routes,                  # use freshly computed, not stale session value
-        st.session_state.origin,
-        st.session_state.destination,
-        trip_result,
+        [],          # no server-side highlight — JS handles it
+        None, None,  # origin/destination managed entirely in JS
+        None,
         live_buses,
         supa_url,
         supa_key,
     )
     components.html(html, height=900, scrolling=False)
 
-    # ── postMessage relay ─────────────────────────────────────────────────────
+    # Resize relay only — no routing relay needed
     relay_js = """
     <script>
     window.addEventListener('message', function(e) {
-        if (!e.data) return;
-
-        // Resize the map iframe to fill viewport
-        if (e.data.type === 'resize_map') {
-            const iframes = window.parent.document.querySelectorAll('iframe');
-            iframes.forEach(function(f) {
-                // target the map iframe (the large one)
-                if (f.getAttribute('height') && parseInt(f.getAttribute('height')) > 100) {
-                    const h = e.data.height;
-                    f.style.height = h + 'px';
-                    f.style.minHeight = h + 'px';
-                    f.setAttribute('height', h);
-                }
-            });
-            return;
-        }
-
-        if (e.data.type !== 'map_action') return;
-        const raw = e.data.payload.raw;
-        const inputs = window.parent.document.querySelectorAll(
-            'input[data-testid="stTextInput"] input');
-        if (inputs.length > 0) {
-            const el = inputs[inputs.length - 1];
-            el.value = raw;
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-        }
+        if (!e.data || e.data.type !== 'resize_map') return;
+        const iframes = window.parent.document.querySelectorAll('iframe');
+        iframes.forEach(function(f) {
+            if (f.getAttribute('height') && parseInt(f.getAttribute('height')) > 100) {
+                const h = e.data.height;
+                f.style.height = h + 'px';
+                f.style.minHeight = h + 'px';
+                f.setAttribute('height', h);
+            }
+        });
     });
     </script>
     """
     components.html(relay_js, height=0)
-    action_val = st.text_input("r", key="action_relay", label_visibility="collapsed")
-
-    if action_val and action_val != st.session_state.last_action:
-        st.session_state.last_action = action_val
-        raw = action_val.split("|")[0]
-
-        if raw == "reset" or raw == "clear_origin" or raw == "clear_destination":
-            if raw in ("reset", "clear_origin"):
-                st.session_state.origin = None
-            if raw in ("reset", "clear_destination"):
-                st.session_state.destination = None
-            st.session_state.highlight_routes = []
-            st.rerun()
-
-        elif raw.startswith("set_origin:"):
-            la, lo = raw[len("set_origin:"):].split("_")
-            st.session_state.origin = {"lat": float(la), "lon": float(lo)}
-            st.rerun()
-
-        elif raw.startswith("set_destination:"):
-            la, lo = raw[len("set_destination:"):].split("_")
-            st.session_state.destination = {"lat": float(la), "lon": float(lo)}
-            st.rerun()
 
 
 if __name__ == "__main__":
