@@ -321,21 +321,19 @@ html, body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
   transform: translateY(0);
   pointer-events: all;
 }}
-#result-card.bottom .steps {{
+#result-card.bottom .legs {{
   flex-direction: row; flex-wrap: nowrap;
   overflow-x: auto; gap: 8px;
   padding-bottom: 4px;
 }}
-#result-card.bottom .steps::-webkit-scrollbar {{ height: 3px; }}
-#result-card.bottom .steps::-webkit-scrollbar-thumb {{
+#result-card.bottom .legs::-webkit-scrollbar {{ height: 3px; }}
+#result-card.bottom .legs::-webkit-scrollbar-thumb {{
   background: rgba(255,255,255,.15); border-radius: 2px; }}
-#result-card.bottom .step {{
-  min-width: 160px; max-width: 180px; flex-shrink: 0;
-  flex-direction: column; align-items: flex-start; gap: 4px;
+#result-card.bottom .leg {{
+  min-width: 150px; max-width: 170px; flex-shrink: 0;
 }}
-#result-card.bottom .si {{ font-size: 18px; }}
-#result-card.bottom .sm {{ font-size: 12px; }}
-#result-card.bottom .ss {{ font-size: 10px; }}
+#result-card.bottom .leg-chip {{ font-size: 10px; padding: 2px 7px; }}
+#result-card.bottom .leg-label {{ font-size: 11px; }}
 #result-card.bottom .summary {{ margin-bottom: 8px; }}
 
 /* ── MINIMIZED mode — just the summary bar ── */
