@@ -290,19 +290,81 @@ html, body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
 
 /* ── RESULT CARD ── */
 #result-card {{
-  position:absolute; bottom:20px; left:50%;
-  transform:translateX(-50%) translateY(300px);
-  transition:transform .4s cubic-bezier(.34,1.56,.64,1);
-  z-index:1000; width:min(460px, 92vw);
-  padding:14px 16px; pointer-events:none;
+  position: absolute;
+  z-index: 1000;
+  pointer-events: none;
+  transition: all .4s cubic-bezier(.34,1.56,.64,1);
 }}
-#result-card.show {{
-  transform:translateX(-50%) translateY(0);
-  pointer-events:all;
+
+/* ── FLOAT mode (default) — centred above bottom ── */
+#result-card.float {{
+  bottom: 20px; left: 50%;
+  transform: translateX(-50%) translateY(300px);
+  width: min(460px, 92vw);
+  padding: 14px 16px;
+  max-height: 60vh; overflow-y: auto;
 }}
+#result-card.float.show {{
+  transform: translateX(-50%) translateY(0);
+  pointer-events: all;
+}}
+
+/* ── BOTTOM mode — full-width horizontal strip ── */
+#result-card.bottom {{
+  bottom: 0; left: 0; right: 0;
+  width: 100%; border-radius: 16px 16px 0 0;
+  transform: translateY(100%);
+  padding: 12px 16px 16px;
+  max-height: 38vh; overflow-y: auto;
+}}
+#result-card.bottom.show {{
+  transform: translateY(0);
+  pointer-events: all;
+}}
+#result-card.bottom .steps {{
+  flex-direction: row; flex-wrap: nowrap;
+  overflow-x: auto; gap: 8px;
+  padding-bottom: 4px;
+}}
+#result-card.bottom .steps::-webkit-scrollbar {{ height: 3px; }}
+#result-card.bottom .steps::-webkit-scrollbar-thumb {{
+  background: rgba(255,255,255,.15); border-radius: 2px; }}
+#result-card.bottom .step {{
+  min-width: 160px; max-width: 180px; flex-shrink: 0;
+  flex-direction: column; align-items: flex-start; gap: 4px;
+}}
+#result-card.bottom .si {{ font-size: 18px; }}
+#result-card.bottom .sm {{ font-size: 12px; }}
+#result-card.bottom .ss {{ font-size: 10px; }}
+#result-card.bottom .summary {{ margin-bottom: 8px; }}
+
+/* ── MINIMIZED mode — just the summary bar ── */
+#result-card.minimized {{
+  bottom: 20px; left: 50%;
+  transform: translateX(-50%);
+  width: min(460px, 92vw);
+  padding: 0;
+  pointer-events: all;
+  transition: all .3s ease;
+}}
+#result-card.minimized .steps {{ display: none; }}
+#result-card.minimized .summary {{ margin-bottom: 0; border-radius: 10px; }}
+
+/* toggle button — sits in top-right of result card */
+#result-toggle {{
+  position: absolute; top: 8px; left: 10px;
+  background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.15);
+  border-radius: 6px; color: #94a3b8; font-size: 11px; font-weight: 600;
+  padding: 3px 8px; cursor: pointer; z-index: 10;
+  display: flex; align-items: center; gap: 4px;
+  transition: all .15s;
+}}
+#result-toggle:hover {{ background: rgba(255,255,255,.16); color: #e2eaf4; }}
+
 .summary {{
   text-align:center; font-size:13px; font-weight:700;
   padding:7px 12px; border-radius:8px; margin-bottom:10px;
+  position: relative;
 }}
 .summary.ok  {{ background:rgba(34,197,94,.15); border:1px solid rgba(34,197,94,.3); color:#4ade80; }}
 .summary.xfr {{ background:rgba(251,191,36,.13); border:1px solid rgba(251,191,36,.3); color:#fbbf24; }}
@@ -321,6 +383,48 @@ html, body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
   display:inline-block; font-size:11px; font-weight:700;
   padding:1px 8px; border-radius:12px;
 }}
+
+/* ── COMPACT LEG CARDS ── */
+.legs {{ display:flex; flex-direction:column; gap:5px; }}
+.leg {{
+  border-radius:10px; overflow:hidden;
+  background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.08);
+  cursor:pointer; transition:background .15s;
+  user-select:none;
+}}
+.leg:hover {{ background:rgba(255,255,255,.09); }}
+.leg-top {{
+  display:flex; align-items:center; gap:8px;
+  padding:10px 12px;
+}}
+.leg-chips {{ display:flex; align-items:center; gap:4px; flex-shrink:0; }}
+.leg-chip {{
+  font-size:11px; font-weight:700; padding:3px 9px;
+  border-radius:20px; border:1.5px solid; white-space:nowrap;
+}}
+.leg-chip.walk {{
+  background:rgba(148,163,184,.1); border-color:rgba(148,163,184,.3); color:#94a3b8;
+}}
+.leg-chip.xfer {{
+  background:rgba(251,191,36,.1); border-color:rgba(251,191,36,.3); color:#fbbf24;
+  padding:3px 7px;
+}}
+.leg-arr {{ color:#475569; font-size:12px; margin:0 1px; }}
+.leg-label {{
+  flex:1; font-size:12px; color:#e2eaf4; font-weight:500; line-height:1.4;
+  direction:rtl;
+}}
+.leg-caret {{
+  color:#475569; font-size:14px; transition:transform .2s; flex-shrink:0;
+}}
+.leg.open .leg-caret {{ transform:rotate(90deg); }}
+.leg-detail {{
+  display:none; padding:0 12px 10px;
+  font-size:11px; color:#64748b; line-height:1.5;
+  border-top:1px solid rgba(255,255,255,.05); padding-top:8px;
+  direction:rtl;
+}}
+.leg.open .leg-detail {{ display:block; }}
 
 /* ── LEGEND ── */
 #leg-btn {{
@@ -393,7 +497,10 @@ html, body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
 </div>
 
 <!-- RESULT -->
-<div id="result-card" class="card" dir="rtl" lang="ckb"><div id="result-inner"></div></div>
+<div id="result-card" class="card float" dir="rtl" lang="ckb">
+  <button id="result-toggle" onclick="cycleResultMode()">⊟ کەمکردنەوە</button>
+  <div id="result-inner"></div>
+</div>
 
 <!-- LIVE BADGE -->
 <div id="live-badge" dir="rtl" lang="ckb"><span class="ld-dot"></span><span id="bus-ct">٠ بەس</span></div>
@@ -819,52 +926,76 @@ function fmtCoord(pt) {{
   return pt ? '('+pt.lat.toFixed(5)+', '+pt.lon.toFixed(5)+')' : '';
 }}
 
+// ── Compact result card builder ───────────────────────────────────────────────
+// Each "leg" is one visual row: icon strip + main label + tap-to-expand detail
+
+function legRow(chips, label, detail) {{
+  // chips = array of {{type:'walk'|'bus'|'xfer', label, color}}
+  const chipHtml = chips.map(c => {{
+    if(c.type==='walk') return `<span class="leg-chip walk">🚶 ${{c.label}}</span>`;
+    if(c.type==='bus')  return `<span class="leg-chip bus" style="background:${{c.color}}22;border-color:${{c.color}}66;color:${{c.color}}">${{c.label}}</span>`;
+    if(c.type==='xfer') return `<span class="leg-chip xfer">🔁</span>`;
+    return '';
+  }}).join('<span class="leg-arr">›</span>');
+
+  const detailHtml = detail
+    ? `<div class="leg-detail">${{detail}}</div>`
+    : '';
+
+  return `<div class="leg" onclick="this.classList.toggle('open')">
+    <div class="leg-top">
+      <div class="leg-chips">${{chipHtml}}</div>
+      <div class="leg-label">${{label}}</div>
+      ${{detail ? '<span class="leg-caret">›</span>' : ''}}
+    </div>
+    ${{detailHtml}}
+  </div>`;
+}}
+
 function showDirect(r) {{
-  const altHtml = r.alts.length
-    ? `<div class="ss" style="margin-top:4px;">هەروەها دەگنجێت: `
-        +r.alts.map(a=>pill(a.name.replace(/_/g,' '),COLORS[a.name]||'#888')).join(' ')
-        +`</div>`
+  const c = COLORS[r.lineO]||'#888';
+  const altsHtml = r.alts.length
+    ? ' · ' + r.alts.map(a=>
+        `<span style="color:${{COLORS[a.name]||'#888'}}">${{a.name.replace(/_/g,' ')}}</span>`
+      ).join(' / ')
     : '';
 
   document.getElementById('result-inner').innerHTML =
     `<div class="summary ok">✅ ڕاستەوخۆ — گۆڕین پێویست نیە</div>`+
-    `<div class="steps">`+
-      step('🚶',
-        `پێویستە <strong>${{r.walkO_m}} م</strong> بە پێ بڕۆی`,
-        `بڕۆ بۆ پاسی <strong>${{r.labelO}}</strong> `+altHtml)+
-      step('🚌',
-        `دەست ڕاگرە لە پاسەکە`,
-        `شوفێر دەوەستێت ئەگەر ڕێگا هەبێت`)+
-      step('🟢',
-        `سەر پاسەکە بکەوە تاوەکو خاڵی سەوز لەسەر نەخشەکە`,
-        `کاتێک گەیشتیت بە ناوچەکە، بڵێ:`)+
-      step('🗣️',
-        `بڵێ: <em>"دابەزین هەیە"</em>`,
-        `ناوی شوێنەکە بڵێ`)+
-      step('🚶',
-        `پێویستە <strong>${{r.walkD_m}} م</strong> بە پێ بڕۆی بۆ شوێنی مەبەستت`,
-        `گەیشتیت!`)+
+    `<div class="legs">`+
+
+    legRow(
+      [{{type:'walk', label: r.walkO_m+'م'}}],
+      `بڕۆ بۆ شەقامی <strong style="color:${{c}}">${{r.labelO}}</strong>`+altsHtml,
+      `پێویستە <strong>${{r.walkO_m}} م</strong> بە پێ بڕۆی — 🟢 خاڵی سەوز لەسەر نەخشەکە`
+    )+
+
+    legRow(
+      [{{type:'bus', label: r.labelO, color: c}}],
+      `دەست ڕاگرە · سەر پاسەکە بکەوە · بڵێ <em>"دابەزین هەیە"</em>`,
+      `شوفێر دەوەستێت ئەگەر ڕێگا هەبێت — 🟢 خاڵی سەوز = شوێنی دابەزین`
+    )+
+
+    legRow(
+      [{{type:'walk', label: r.walkD_m+'م'}}],
+      `پێویستە <strong>${{r.walkD_m}} م</strong> بە پێ بڕۆی — گەیشتیت! 🎉`,
+      null
+    )+
+
     `</div>`;
-  document.getElementById('result-card').classList.add('show');
+  showCard();
 }}
 
 function showTransfer(r) {{
-  const xferLine = r.sameRoad
+  const cO = COLORS[r.lineO]||'#888', cD = COLORS[r.lineD]||'#888';
+
+  const xferDetail = r.sameRoad
     ? `هەمان شەقام — پیاسەکردن پێویست نیە`
-    : `پێویستە <strong>${{r.xferWalk_m}} م</strong> بە پێ بڕۆی بۆ شەقامی <strong>${{r.viaBazaar?'پاسی دواتر':r.labelD}}</strong>`;
+    : `پێویستە <strong>${{r.xferWalk_m}} م</strong> بە پێ بڕۆی — 🟡 زەرد بۆ 🔵 شین لەسەر نەخشەکە`;
 
-  // At terminal endpoints (Bazaar) the bus stops by default — no need to ask
-  const transferInstruction = r.viaBazaar
-    ? `پاسەکە لە بازاڕ دەوەستێت بە خۆی`
-    : `بڵێ: <em>"دابەزین هەیە"</em> — لە شەقامی ${{r.labelD}}`;
-
-  const dropSub = r.viaBazaar
-    ? `🟡 خاڵی زەرد = دابەزین لە بازاڕ — دەوەستێت بە خۆی`
-    : `🟡 خاڵی زەرد = شوێنی دابەزین`;
-
-  const boardSub = r.viaBazaar
-    ? `🔵 خاڵی شین = سەر پاسی ${{r.labelD}} کەوە لە بازاڕ`
-    : `🔵 خاڵی شین = شوێنی سەرکەوتن لە ${{r.labelD}}`;
+  const dropOffNote = r.viaBazaar
+    ? `پاسەکە لە بازاڕ دەوەستێت بە خۆی — دابەزە`
+    : `بڵێ: <em>"دابەزین هەیە"</em> لە شەقامی ${{r.labelD}} — 🟡 خاڵی زەرد`;
 
   const header = r.viaBazaar
     ? `🔁 یەک گۆڕین — لە ڕێگای بازاڕ`
@@ -872,49 +1003,93 @@ function showTransfer(r) {{
 
   document.getElementById('result-inner').innerHTML =
     `<div class="summary xfr">${{header}}</div>`+
-    `<div class="steps">`+
-      step('🚶',
-        `پێویستە <strong>${{r.walkO_m}} م</strong> بە پێ بڕۆی بۆ کنارەی شەقام`,
-        `بڕۆ بۆ شەقامی بەسی <strong>${{r.labelO}}</strong> — 🟢 خاڵی سەوز لەسەر نەخشەکە`)+
-      step('🚌',
-        `دەست ڕاگرە لە پاسەکە`,
-        `شوفێر دەوەستێت ئەگەر ڕێگا هەبێت`)+
-      step('🟡',
-        `سەر پاسەکە بکەوە بە تاوەکو خاڵی زەرد لەسەر نەخشەکە`,
-        `کاتێک گەیشتیت بە شوێنی گۆڕین، بڵێ:`)+
-      step('🗣️', transferInstruction, dropSub)+
-      step('🚶', xferLine, boardSub)+
-      step('🚌',
-        `دەست ڕاگرە لە پاسەکە — سەر پاسی <strong>${{r.labelD}}</strong> کەوە`,
-        `شوفێر دەوەستێت ئەگەر ڕێگا هەبێت`)+
-      step('🔵',
-        `سەر پاسەکە بکەوە بە تاوەکو خاڵی شین لەسەر نەخشەکە`,
-        `کاتێک گەیشتیت بە ناوچەکە، بڵێ:`)+
-      step('🗣️',
-        `بڵێ: <em>"دابەزین هەیە"</em>`,
-        `داوای وەستانی نزیک مەوداکەت بکە`)+
-      step('🚶',
-        `پێویستە <strong>${{r.walkD_m}} م</strong> بە پێ بڕۆی بۆ مەوداکەت`,
-        `گەیشتیت!`)+
+    `<div class="legs">`+
+
+    legRow(
+      [{{type:'walk', label: r.walkO_m+'م'}}],
+      `بڕۆ بۆ شەقامی <strong style="color:${{cO}}">${{r.labelO}}</strong>`,
+      `پێویستە <strong>${{r.walkO_m}} م</strong> بە پێ بڕۆی — 🟢 خاڵی سەوز لەسەر نەخشەکە`
+    )+
+
+    legRow(
+      [{{type:'bus', label: r.labelO, color: cO}}],
+      `دەست ڕاگرە · سەر پاسەکە بکەوە · ${{dropOffNote}}`,
+      `سەر پاسەکە بکەوە بە تاوەکو خاڵی زەرد — کاتێک گەیشتیت بڵێ دابەزین هەیە`
+    )+
+
+    legRow(
+      [{{type:'xfer'}}, {{type:'walk', label: r.xferWalk_m+'م'}}],
+      xferDetail,
+      r.sameRoad ? `هەمان شەقام` : `🟡 دابەزە — 🔵 خاڵی شین = شوێنی سەرکەوتن لە ${{r.labelD}}`
+    )+
+
+    legRow(
+      [{{type:'bus', label: r.labelD, color: cD}}],
+      `دەست ڕاگرە · سەر پاسی <strong style="color:${{cD}}">${{r.labelD}}</strong> بکەوە · بڵێ <em>"دابەزین هەیە"</em>`,
+      `سەر پاسەکە بکەوە بە تاوەکو خاڵی شین — کاتێک گەیشتیت بڵێ دابەزین هەیە`
+    )+
+
+    legRow(
+      [{{type:'walk', label: r.walkD_m+'م'}}],
+      `پێویستە <strong>${{r.walkD_m}} م</strong> بە پێ بڕۆی — گەیشتیت! 🎉`,
+      null
+    )+
+
     `</div>`;
-  document.getElementById('result-card').classList.add('show');
+  showCard();
 }}
 
 function step(icon, main, sub) {{
-  return `<div class="step">`+
-    `<span class="si">${{icon}}</span>`+
-    `<div class="sb"><div class="sm">${{main}}</div><div class="ss">${{sub}}</div></div>`+
-    `</div>`;
+  // kept for compatibility — not used in new card but may be called elsewhere
+  return `<div class="step"><span class="si">${{icon}}</span>`+
+    `<div class="sb"><div class="sm">${{main}}</div><div class="ss">${{sub}}</div></div></div>`;
 }}
 
 function showErr(msg) {{
   document.getElementById('result-inner').innerHTML=`<div class="summary err">⚠️ ${{msg}}</div>`;
-  document.getElementById('result-card').classList.add('show');
+  showCard();
+}}
+function showCard() {{
+  const rc = document.getElementById('result-card');
+  // Always reset to float mode when a new result appears
+  rc.classList.remove('bottom','minimized');
+  if(_resultMode !== 'float') {{
+    rc.classList.add('float');
+    _resultMode = 'float';
+    document.getElementById('result-toggle').textContent = _modeLabels['float'];
+  }}
+  rc.classList.add('show');
+  document.getElementById('result-toggle').style.display = 'flex';
 }}
 function hideResult() {{
   clearXferLayers();
-  document.getElementById('result-card').classList.remove('show');
+  const rc = document.getElementById('result-card');
+  rc.classList.remove('show');
+  document.getElementById('result-toggle').style.display = 'none';
   drawRoutes(null);
+}}
+
+// ── Mode cycling: float → bottom → minimized → float ─────────────────────────
+let _resultMode = 'float';
+const _modeLabels = {{
+  float:     '⊟ کەمکردنەوە',
+  bottom:    '▤ خوارەوە',
+  minimized: '⊞ گەورەکردنەوە',
+}};
+const _modeNext = {{ float:'bottom', bottom:'minimized', minimized:'float' }};
+
+function cycleResultMode() {{
+  const rc = document.getElementById('result-card');
+  const btn = document.getElementById('result-toggle');
+  // Remove current mode class
+  rc.classList.remove(_resultMode);
+  // Advance
+  _resultMode = _modeNext[_resultMode];
+  rc.classList.add(_resultMode);
+  // Keep 'show' class in float/bottom, not needed for minimized (always visible)
+  if(_resultMode === 'minimized') rc.classList.remove('show');
+  else rc.classList.add('show');
+  btn.textContent = _modeLabels[_resultMode];
 }}
 
 // Run on load if session already has both points
