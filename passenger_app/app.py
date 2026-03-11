@@ -306,8 +306,7 @@ html, body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
   50%      {{ box-shadow:0 0 0 6px rgba(96,165,250,0); }}
 }}
 
-/* crosshair when picking */
-.picking {{ cursor:crosshair !important; }}
+/* crosshair cursor set via JS on map container */
 
 /* ── RESULT CARD ── */
 #result-card {{
@@ -1148,11 +1147,41 @@ if(ptO&&ptD) compute();
 
 // ── Mode (pick by clicking map) ───────────────────────────────────────────────
 let mode = '';
+
+// Stop clicks on the floating panels from leaking through to the map
+['top-panel','result-card','leg-panel','leg-btn','live-badge'].forEach(id => {{
+  const el = document.getElementById(id);
+  if(el) L.DomEvent.on(el, 'click mousedown touchstart', L.DomEvent.stopPropagation);
+}});
+
 function toggleMode(m) {{
   mode = (mode===m) ? '' : m;
   document.getElementById('btn-o').classList.toggle('on', mode==='origin');
   document.getElementById('btn-d').classList.toggle('on', mode==='dest');
-  map.getContainer().classList.toggle('picking', mode!=='');
+  map.getContainer().style.cursor = mode ? 'crosshair' : '';
+  // Show/hide tap-hint overlay
+  let hint = document.getElementById('tap-hint');
+  if(mode) {{
+    if(!hint) {{
+      hint = document.createElement('div');
+      hint.id = 'tap-hint';
+      hint.style.cssText = `
+        position:absolute; bottom:90px; left:50%; transform:translateX(-50%);
+        z-index:1100; background:rgba(10,16,26,.85); backdrop-filter:blur(10px);
+        border:1px solid rgba(255,255,255,.15); border-radius:10px;
+        padding:8px 18px; font-size:12px; color:#e2eaf4;
+        pointer-events:none; white-space:nowrap;
+        font-family:'Noto Naskh Arabic',sans-serif;
+      `;
+      document.body.appendChild(hint);
+    }}
+    hint.textContent = mode==='origin'
+      ? '📍 لەسەر نەخشەکە کلیک بکە بۆ دیاریکردنی بنکە'
+      : '🏁 لەسەر نەخشەکە کلیک بکە بۆ دیاریکردنی مەودا';
+    hint.style.display = 'block';
+  }} else {{
+    if(hint) hint.style.display = 'none';
+  }}
 }}
 
 map.on('click', e => {{
@@ -1166,13 +1195,18 @@ map.on('click', e => {{
     mode='dest';
     document.getElementById('btn-o').classList.remove('on');
     document.getElementById('btn-d').classList.add('on');
+    // update hint
+    const hint=document.getElementById('tap-hint');
+    if(hint) hint.textContent='🏁 لەسەر نەخشەکە کلیک بکە بۆ دیاریکردنی مەودا';
   }} else {{
     ptD={{lat,lon}}; placeD(lat,lon);
     document.getElementById('inp-d').value=fmt;
     postPt('set_destination',lat,lon);
     mode='';
     document.getElementById('btn-d').classList.remove('on');
-    map.getContainer().classList.remove('picking');
+    map.getContainer().style.cursor = '';
+    const hint=document.getElementById('tap-hint');
+    if(hint) hint.style.display='none';
   }}
   compute();
 }});
@@ -1227,7 +1261,9 @@ function resetAll() {{
   document.getElementById('btn-o').classList.remove('on');
   document.getElementById('btn-d').classList.remove('on');
   document.getElementById('btn-gps').classList.remove('located','locating');
-  map.getContainer().classList.remove('picking');
+  map.getContainer().style.cursor = '';
+  const hint=document.getElementById('tap-hint');
+  if(hint) hint.style.display='none';
   postPt('reset');
   hideResult();
 }}
