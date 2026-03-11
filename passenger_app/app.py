@@ -365,21 +365,21 @@ html, body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
 <div id="top-panel" class="card">
   <div class="row">
     <span class="dot" style="background:#22c55e"></span>
-    <button class="pick-btn green" id="btn-o" onclick="toggleMode('origin')">📍 Pick</button>
-    <input class="coord-box" id="inp-o" placeholder="Origin — paste lat, lon from Google Maps"
+    <button class="pick-btn green" id="btn-o" onclick="toggleMode('origin')">📍 هەڵبژێرە</button>
+    <input class="coord-box" id="inp-o" placeholder="بنکە — کۆدینەیت لە گووگڵ مەپ لێرە بنووسە"
            oninput="onCoordInput('origin', this.value)"/>
     <button class="x-btn" onclick="clearPt('origin')">✕</button>
   </div>
   <div class="hr"></div>
   <div class="row">
     <span class="dot" style="background:#ef4444"></span>
-    <button class="pick-btn red" id="btn-d" onclick="toggleMode('dest')">🏁 Pick</button>
-    <input class="coord-box" id="inp-d" placeholder="Destination — paste lat, lon from Google Maps"
+    <button class="pick-btn red" id="btn-d" onclick="toggleMode('dest')">🏁 هەڵبژێرە</button>
+    <input class="coord-box" id="inp-d" placeholder="مەودا — کۆدینەیت لە گووگڵ مەپ لێرە بنووسە"
            oninput="onCoordInput('dest', this.value)"/>
     <button class="x-btn" onclick="clearPt('dest')">✕</button>
   </div>
   <div class="hr"></div>
-  <div class="row"><button class="reset-btn" onclick="resetAll()">↺ Reset</button></div>
+  <div class="row"><button class="reset-btn" onclick="resetAll()">↺ ڕەستکردنەوە</button></div>
 </div>
 
 <!-- LEGEND -->
@@ -491,71 +491,316 @@ if(SUPA_URL&&SUPA_KEY) {{
   }}).subscribe();
 }}
 
-// ── Routing (fully in JS) ─────────────────────────────────────────────────────
-const PTS = [];
+// ══════════════════════════════════════════════════════════════════════════════
+//  ROUTING ENGINE
+//
+//  Real Sulaymaniyah bus model:
+//  • No fixed stops — wave down the bus anywhere along its road
+//  • Tell the driver where to drop you off
+//  • Transfer = the two route lines physically share the same road
+//               (any point on line A within XFER_THRESH of any point on line B)
+//  • If lines share a road → drop off there, board next bus on same road (0m walk)
+//  • If closest approach is 50–200m → short walk between the two roads
+//  • If lines never come close → impossible transfer, not suggested
+// ══════════════════════════════════════════════════════════════════════════════
+
+const XFER_MAX_KM = 0.05;   // 50 m — max gap between lines to consider a valid transfer
+const XFER_SAME   = 0.015;  // 15 m — within this = literally same road, no walking
+
+// Build per-route point arrays  routeName → [{{lat,lon}}, ...]
+const ROUTE_PTS = Object.create(null);
 for (const f of GEOJSON.features||[]) {{
   const name = (f.properties&&f.properties.layer)||'';
+  if(!name) continue;
+  if(!ROUTE_PTS[name]) ROUTE_PTS[name]=[];
   const geom = f.geometry||{{}};
-  const lines = geom.type==='LineString' ? [geom.coordinates]
-              : geom.type==='MultiLineString' ? geom.coordinates : [];
-  for (const line of lines)
-    for (const c of line)
-      if(Array.isArray(c)&&c.length>=2) PTS.push({{lat:c[1],lon:c[0],name}});
+  const segs = geom.type==='LineString'      ? [geom.coordinates]
+             : geom.type==='MultiLineString' ?  geom.coordinates : [];
+  for (const seg of segs)
+    for (const c of seg)
+      if(Array.isArray(c)&&c.length>=2)
+        ROUTE_PTS[name].push({{lat:c[1], lon:c[0]}});
 }}
+const ROUTE_NAMES = Object.keys(ROUTE_PTS);
 
+// ── Haversine km ─────────────────────────────────────────────────────────────
 function hav(la1,lo1,la2,lo2) {{
-  const R=6371, d2r=Math.PI/180;
-  const dLa=(la2-la1)*d2r, dLo=(lo2-lo1)*d2r;
-  const a=Math.sin(dLa/2)**2+Math.cos(la1*d2r)*Math.cos(la2*d2r)*Math.sin(dLo/2)**2;
+  const R=6371, r=Math.PI/180;
+  const dla=(la2-la1)*r, dlo=(lo2-lo1)*r;
+  const a=Math.sin(dla/2)**2+Math.cos(la1*r)*Math.cos(la2*r)*Math.sin(dlo/2)**2;
   return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
 }}
 
-function nearest(lat,lon) {{
-  let best=null, bd=Infinity;
-  for(const p of PTS) {{ const d=hav(lat,lon,p.lat,p.lon); if(d<bd){{bd=d;best=p;}} }}
-  return best ? {{name:best.name, km:bd}} : null;
+// Nearest point on a named route to (lat,lon) — returns {{km, pt}}
+function nearestOnRoute(lat, lon, name) {{
+  let best=Infinity, bestPt=null;
+  for (const p of (ROUTE_PTS[name]||[])) {{
+    const d=hav(lat,lon,p.lat,p.lon);
+    if(d<best){{best=d; bestPt=p;}}
+  }}
+  return {{km:best, pt:bestPt}};
 }}
 
-// State
+// All routes reachable on foot within maxKm, sorted by distance
+function nearbyRoutes(lat, lon, maxKm) {{
+  const out=[];
+  for (const name of ROUTE_NAMES) {{
+    const {{km,pt}}=nearestOnRoute(lat,lon,name);
+    if(km<=maxKm) out.push({{name,km,boardPt:pt}});
+  }}
+  return out.sort((a,b)=>a.km-b.km);
+}}
+
+// ── Transfer geometry ────────────────────────────────────────────────────────
+// Find the closest approach between two route polylines.
+// Returns {{gapKm, ptA, ptB}} — ptA = drop-off on line A, ptB = board on line B.
+// Uses every-Nth-point sampling for performance on page load.
+function closestApproach(nameA, nameB) {{
+  const ptsA=ROUTE_PTS[nameA]||[], ptsB=ROUTE_PTS[nameB]||[];
+  let best=Infinity, ptA=null, ptB=null;
+  const stepA = Math.max(1, Math.floor(ptsA.length/80));
+  const stepB = Math.max(1, Math.floor(ptsB.length/80));
+  for (let i=0;i<ptsA.length;i+=stepA) {{
+    for (let j=0;j<ptsB.length;j+=stepB) {{
+      const d=hav(ptsA[i].lat,ptsA[i].lon,ptsB[j].lat,ptsB[j].lon);
+      if(d<best){{best=d;ptA=ptsA[i];ptB=ptsB[j];}}
+    }}
+  }}
+  // Refine: rescan ±5 neighbours of the best points at full resolution
+  if(ptA&&ptB) {{
+    const iA=ptsA.indexOf(ptA), iB=ptsB.indexOf(ptB);
+    for (let i=Math.max(0,iA-5);i<=Math.min(ptsA.length-1,iA+5);i++) {{
+      for (let j=Math.max(0,iB-5);j<=Math.min(ptsB.length-1,iB+5);j++) {{
+        const d=hav(ptsA[i].lat,ptsA[i].lon,ptsB[j].lat,ptsB[j].lon);
+        if(d<best){{best=d;ptA=ptsA[i];ptB=ptsB[j];}}
+      }}
+    }}
+  }}
+  return {{gapKm:best, ptA, ptB}};
+}}
+
+// Pre-compute approach table at startup (once, cached)
+const APPROACH = Object.create(null);
+for (const a of ROUTE_NAMES) {{
+  APPROACH[a] = Object.create(null);
+  for (const b of ROUTE_NAMES) {{
+    if(a!==b) APPROACH[a][b] = closestApproach(a,b);
+  }}
+}}
+
+// ── State ────────────────────────────────────────────────────────────────────
 let ptO = INIT_O ? {{lat:INIT_O.lat,lon:INIT_O.lon}} : null;
 let ptD = INIT_D ? {{lat:INIT_D.lat,lon:INIT_D.lon}} : null;
 
+// Transfer map layers
+let _dropMarker=null, _boardMarker=null, _walkLine=null;
+function clearXferLayers() {{
+  [_dropMarker,_boardMarker,_walkLine].forEach(l=>{{if(l)map.removeLayer(l);}});
+  _dropMarker=_boardMarker=_walkLine=null;
+}}
+
+// ── Main compute ─────────────────────────────────────────────────────────────
 function compute() {{
+  clearXferLayers();
   if(!ptO||!ptD) {{ hideResult(); return; }}
-  const nO=nearest(ptO.lat,ptO.lon);
-  const nD=nearest(ptD.lat,ptD.lon);
-  if(!nO||!nD) {{ showErr('Could not match any route.'); return; }}
-  if(nO.km>MAX_WALK) {{ showErr('Origin is '+Math.round(nO.km*1000)+' m from nearest route — too far (max '+Math.round(MAX_WALK*1000)+' m).'); return; }}
-  if(nD.km>MAX_WALK) {{ showErr('Destination is '+Math.round(nD.km*1000)+' m from nearest route — too far (max '+Math.round(MAX_WALK*1000)+' m).'); return; }}
 
-  const same = nO.name===nD.name;
-  const cO=COLORS[nO.name]||'#888', cD=COLORS[nD.name]||'#888';
-  const lO=nO.name.replace(/_/g,' '), lD=nD.name.replace(/_/g,' ');
-  drawRoutes(new Set(same?[nO.name]:[nO.name,nD.name]));
+  const atO = nearbyRoutes(ptO.lat, ptO.lon, MAX_WALK);
+  const atD = nearbyRoutes(ptD.lat, ptD.lon, MAX_WALK);
 
-  const pill=(label,color)=>`<span class="pill" style="background:${{color}}22;color:${{color}};border:1px solid ${{color}}55">${{label}}</span>`;
+  if(!atO.length) {{
+    showErr('Your starting point is more than '+Math.round(MAX_WALK*1000)+' m from any bus route.'); return;
+  }}
+  if(!atD.length) {{
+    showErr('Your destination is more than '+Math.round(MAX_WALK*1000)+' m from any bus route.'); return;
+  }}
 
-  const steps = [
-    `<div class="step"><span class="si">🚶</span><div class="sb">
-      <div class="sm">Walk <strong>${{Math.round(nO.km*1000)}} m</strong> to the nearest stop</div>
-      <div class="ss">to board ${{pill(lO,cO)}}</div></div></div>`,
-    `<div class="step"><span class="si">🚌</span><div class="sb">
-      <div class="sm">Board ${{pill(lO,cO)}}</div>
-      <div class="ss">${{same?'Ride directly to your stop':'Ride to the transfer stop'}}</div></div></div>`,
-  ];
-  if(!same) steps.push(
-    `<div class="step"><span class="si">🔁</span><div class="sb">
-      <div class="sm">Transfer to ${{pill(lD,cD)}}</div>
-      <div class="ss">where the two routes intersect</div></div></div>`);
-  steps.push(
-    `<div class="step"><span class="si">📍</span><div class="sb">
-      <div class="sm">Walk <strong>${{Math.round(nD.km*1000)}} m</strong> to your destination</div>
-      <div class="ss">You've arrived!</div></div></div>`);
+  const namesAtD = new Set(atD.map(r=>r.name));
+
+  // ── CASE 1: Direct ────────────────────────────────────────────────────────
+  const directs = atO.filter(r=>namesAtD.has(r.name));
+  if(directs.length>0) {{
+    // Pick the one that minimises total walk (origin walk + destination walk)
+    let best=null, bestTotal=Infinity;
+    for (const r of directs) {{
+      const wD = atD.find(x=>x.name===r.name).km;
+      const t = r.km+wD;
+      if(t<bestTotal){{bestTotal=t;best=r;}}
+    }}
+    const walkD = atD.find(r=>r.name===best.name).km;
+    const alts  = directs.filter(r=>r.name!==best.name);
+
+    // Board point marker on origin route
+    _dropMarker = pulseMarker(best.boardPt.lat, best.boardPt.lon, '#22c55e', 'Board here');
+    // Drop-off point marker on destination side
+    const dropPt = nearestOnRoute(ptD.lat, ptD.lon, best.name).pt;
+    _boardMarker = pulseMarker(dropPt.lat, dropPt.lon, '#22c55e', 'Ask driver to stop here');
+
+    drawRoutes(new Set(directs.map(r=>r.name)));
+    showDirect({{
+      lineO:   best.name,
+      labelO:  best.name.replace(/_/g,' '),
+      colorO:  COLORS[best.name]||'#888',
+      walkO_m: Math.round(best.km*1000),
+      walkD_m: Math.round(walkD*1000),
+      boardPt: best.boardPt,
+      dropPt,
+      alts,
+    }});
+    return;
+  }}
+
+  // ── CASE 2: 1 transfer ────────────────────────────────────────────────────
+  // Find the pair (lineA from atO, lineB from atD) with:
+  //   1. A valid crossing (gapKm ≤ XFER_MAX_KM)
+  //   2. Minimum score = walkO + gapKm*2 + walkD
+  let bestT=null, bestScore=Infinity;
+  for (const rO of atO) {{
+    for (const rD of atD) {{
+      const app = APPROACH[rO.name]&&APPROACH[rO.name][rD.name];
+      if(!app||app.gapKm>XFER_MAX_KM) continue;
+      const score = rO.km + app.gapKm + rD.km;
+      if(score<bestScore){{bestScore=score; bestT={{rO,rD,app}};}}
+    }}
+  }}
+
+  if(bestT) {{
+    const {{rO,rD,app}}=bestT;
+    const sameRoad = app.gapKm<=XFER_SAME;
+    const xferWalk_m = Math.round(app.gapKm*1000);
+
+    drawRoutes(new Set([rO.name,rD.name]));
+
+    // Drop-off circle on line A (pulsing yellow)
+    _dropMarker = pulseMarker(app.ptA.lat, app.ptA.lon, '#fbbf24',
+      'Tell driver to stop here — transfer point');
+
+    // Board circle on line B (pulsing blue)
+    _boardMarker = pulseMarker(app.ptB.lat, app.ptB.lon, '#60a5fa',
+      'Board '+rD.name.replace(/_/g,' ')+' here');
+
+    // Dashed walking line between them (only if gap > ~10m)
+    if(!sameRoad && app.gapKm>0.01) {{
+      _walkLine = L.polyline(
+        [[app.ptA.lat,app.ptA.lon],[app.ptB.lat,app.ptB.lon]],
+        {{color:'#fbbf24', weight:2, dashArray:'6 5', opacity:0.8}}
+      ).addTo(map);
+    }}
+
+    showTransfer({{
+      lineO:   rO.name, labelO: rO.name.replace(/_/g,' '), colorO: COLORS[rO.name]||'#888',
+      lineD:   rD.name, labelD: rD.name.replace(/_/g,' '), colorD: COLORS[rD.name]||'#888',
+      walkO_m: Math.round(rO.km*1000),
+      walkD_m: Math.round(rD.km*1000),
+      xferWalk_m, sameRoad,
+      dropPt:  app.ptA, boardPt: app.ptB,
+    }});
+    return;
+  }}
+
+  // ── CASE 3: No valid transfer found ──────────────────────────────────────
+  showErr('No route found — the bus lines near your origin and destination do not share a road within walking distance.');
+}}
+
+// ── Pulsing circle marker ─────────────────────────────────────────────────────
+function pulseMarker(lat, lon, color, tip) {{
+  const icon = L.divIcon({{
+    html: `<div style="
+      width:18px;height:18px;border-radius:50%;
+      background:${{color}};border:3px solid #fff;
+      box-shadow:0 0 0 0 ${{color}}88;
+      animation:ripple 1.4s infinite;"></div>`,
+    iconSize:[18,18], iconAnchor:[9,9], className:''
+  }});
+  return L.marker([lat,lon],{{icon,zIndexOffset:900}})
+    .bindTooltip(tip,{{permanent:false,direction:'top'}})
+    .addTo(map);
+}}
+
+// Inject ripple keyframe once
+if(!document.getElementById('ripple-style')) {{
+  const s=document.createElement('style');
+  s.id='ripple-style';
+  s.textContent=`@keyframes ripple{{
+    0%{{box-shadow:0 0 0 0 rgba(255,255,255,.6);}}
+    70%{{box-shadow:0 0 0 10px rgba(255,255,255,0);}}
+    100%{{box-shadow:0 0 0 0 rgba(255,255,255,0);}}
+  }}`;
+  document.head.appendChild(s);
+}}
+
+// ── Result renderers ──────────────────────────────────────────────────────────
+function pill(label,color) {{
+  return `<span class="pill" style="background:${{color}}22;color:${{color}};border:1px solid ${{color}}55">${{label}}</span>`;
+}}
+
+function fmtCoord(pt) {{
+  return pt ? '('+pt.lat.toFixed(5)+', '+pt.lon.toFixed(5)+')' : '';
+}}
+
+function showDirect(r) {{
+  const altHtml = r.alts.length
+    ? `<div class="ss" style="margin-top:4px;">Also works: `
+        +r.alts.map(a=>pill(a.name.replace(/_/g,' '),COLORS[a.name]||'#888')).join(' ')
+        +`</div>`
+    : '';
 
   document.getElementById('result-inner').innerHTML =
-    `<div class="summary ${{same?'ok':'xfr'}}">${{same?'✅ Direct — no transfer needed':'🔁 1 transfer required'}}</div>`+
-    `<div class="steps">${{steps.join('')}}</div>`;
+    `<div class="summary ok">✅ Direct — no transfer needed</div>`+
+    `<div class="steps">`+
+      step('🚶',
+        `Walk <strong>${{r.walkO_m}} m</strong> to the road`,
+        `Head to the <strong>${{r.labelO}}</strong> bus road `+altHtml)+
+      step('🚌',
+        `Raise your hand — board <strong>${{r.labelO}}</strong>`,
+        `The driver will stop when traffic allows`)+
+      step('🗣️',
+        `Tell the driver your drop-off area`,
+        `Point at your destination on the map or name the area — yellow dot shows where to ask to stop`)+
+      step('🚶',
+        `Walk <strong>${{r.walkD_m}} m</strong> to your destination`,
+        `You've arrived!'`)+
+    `</div>`;
   document.getElementById('result-card').classList.add('show');
+}}
+
+function showTransfer(r) {{
+  const xferLine = r.sameRoad
+    ? `Same road — no walking needed between buses`
+    : `Walk <strong>${{r.xferWalk_m}} m</strong> to the <strong>${{r.labelD}}</strong> road`;
+
+  document.getElementById('result-inner').innerHTML =
+    `<div class="summary xfr">🔁 1 transfer required</div>`+
+    `<div class="steps">`+
+      step('🚶',
+        `Walk <strong>${{r.walkO_m}} m</strong> to the road`,
+        `Head to the <strong>${{r.labelO}}</strong> bus road`)+
+      step('🚌',
+        `Raise your hand — board <strong>${{r.labelO}}</strong>`,
+        `The driver will stop when traffic allows`)+
+      step('🗣️',
+        `Tell the driver: <em>"Stop at the ${{r.labelD}} road"</em>`,
+        `🟡 Yellow dot on map = your drop-off point ${{fmtCoord(r.dropPt)}}`)+
+      step('🚶',
+        xferLine,
+        `🔵 Blue dot on map = where to board ${{r.labelD}}`)+
+      step('🚌',
+        `Raise your hand — board <strong>${{r.labelD}}</strong>`,
+        `The driver will stop when traffic allows`)+
+      step('🗣️',
+        `Tell the driver your destination area`,
+        `Ask to stop near your destination`)+
+      step('🚶',
+        `Walk <strong>${{r.walkD_m}} m</strong> to your destination`,
+        `You've arrived!`)+
+    `</div>`;
+  document.getElementById('result-card').classList.add('show');
+}}
+
+function step(icon, main, sub) {{
+  return `<div class="step">`+
+    `<span class="si">${{icon}}</span>`+
+    `<div class="sb"><div class="sm">${{main}}</div><div class="ss">${{sub}}</div></div>`+
+    `</div>`;
 }}
 
 function showErr(msg) {{
@@ -563,11 +808,12 @@ function showErr(msg) {{
   document.getElementById('result-card').classList.add('show');
 }}
 function hideResult() {{
+  clearXferLayers();
   document.getElementById('result-card').classList.remove('show');
   drawRoutes(null);
 }}
 
-// Run on load if both already set (page reload)
+// Run on load if session already has both points
 if(ptO&&ptD) compute();
 
 // ── Mode (pick by clicking map) ───────────────────────────────────────────────
