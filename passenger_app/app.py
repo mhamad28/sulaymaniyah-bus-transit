@@ -216,13 +216,15 @@ def build_map_html(routes_geojson: dict, highlight: List[str],
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 * {{ margin:0; padding:0; box-sizing:border-box; }}
 html, body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
-  font-family: system-ui, sans-serif; }}
+  font-family: 'Noto Naskh Arabic', system-ui, sans-serif; }}
 #map {{ width:100%; height:100vh; }}
 
 /* glass card base */
@@ -264,8 +266,9 @@ html, body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
   border-radius:8px; padding:7px 10px;
   font-size:12px; font-family:monospace; color:#e2eaf4;
   outline:none; transition:border-color .15s;
+  direction: ltr;  /* coords are always LTR (numbers) */
 }}
-.coord-box::placeholder {{ color:#475569; }}
+.coord-box::placeholder {{ color:#475569; direction: rtl; font-family: 'Noto Naskh Arabic', sans-serif; }}
 .coord-box:focus {{ border-color:#00d4ff; }}
 .x-btn {{
   flex-shrink:0; width:24px; height:24px; border-radius:50%;
@@ -362,7 +365,7 @@ html, body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
 <div id="map"></div>
 
 <!-- TOP PANEL -->
-<div id="top-panel" class="card">
+<div id="top-panel" class="card" dir="rtl" lang="ckb">
   <div class="row">
     <span class="dot" style="background:#22c55e"></span>
     <button class="pick-btn green" id="btn-o" onclick="toggleMode('origin')">📍 هەڵبژێرە</button>
@@ -385,15 +388,15 @@ html, body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
 <!-- LEGEND -->
 <button id="leg-btn" onclick="toggleLeg()">🗺</button>
 <div id="leg-panel" class="card">
-  <div style="font-size:9px;font-weight:700;letter-spacing:.12em;color:#475569;
-    text-transform:uppercase;margin-bottom:4px;">Bus Lines</div>
+  <div style="font-size:9px;font-weight:700;letter-spacing:.05em;color:#475569;
+    margin-bottom:4px;">هێڵەکانی بەس</div>
 </div>
 
 <!-- RESULT -->
-<div id="result-card" class="card"><div id="result-inner"></div></div>
+<div id="result-card" class="card" dir="rtl" lang="ckb"><div id="result-inner"></div></div>
 
 <!-- LIVE BADGE -->
-<div id="live-badge"><span class="ld-dot"></span><span id="bus-ct">0 buses</span></div>
+<div id="live-badge" dir="rtl" lang="ckb"><span class="ld-dot"></span><span id="bus-ct">٠ بەس</span></div>
 
 <script>
 const COLORS   = {colors_str};
@@ -478,7 +481,7 @@ function placeBus(b) {{
   const tip = b.bus_number+' · '+(b.bus_line||'').replace(/_/g,' ')+' · '+Math.round(b.speed_kmh||0)+' km/h';
   if(busM[b.bus_number]) {{ busM[b.bus_number].setLatLng([b.lat,b.lon]); busM[b.bus_number].setTooltipContent(tip); }}
   else busM[b.bus_number]=L.marker([b.lat,b.lon],{{icon:busIcon(c,b.bus_number),zIndexOffset:500}}).bindTooltip(tip).addTo(map);
-  document.getElementById('bus-ct').textContent=Object.keys(busM).length+' bus'+(Object.keys(busM).length!==1?'es':'')+' live';
+  document.getElementById('bus-ct').textContent=Object.keys(busM).length+' بەس زیندوو';
 }}
 BUSES.forEach(placeBus);
 if(SUPA_URL&&SUPA_KEY) {{
@@ -599,10 +602,10 @@ function compute() {{
   const atD = nearbyRoutes(ptD.lat, ptD.lon, MAX_WALK);
 
   if(!atO.length) {{
-    showErr('Your starting point is more than '+Math.round(MAX_WALK*1000)+' m from any bus route.'); return;
+    showErr('دەستپێکردنت زیاتر لە '+Math.round(MAX_WALK*1000)+' م دوورە لە هیچ هێڵێک'); return;
   }}
   if(!atD.length) {{
-    showErr('Your destination is more than '+Math.round(MAX_WALK*1000)+' m from any bus route.'); return;
+    showErr('مەوداکەت زیاتر لە '+Math.round(MAX_WALK*1000)+' م دوورە لە هیچ هێڵێک'); return;
   }}
 
   const namesAtD = new Set(atD.map(r=>r.name));
@@ -621,10 +624,10 @@ function compute() {{
     const alts  = directs.filter(r=>r.name!==best.name);
 
     // Board point marker on origin route
-    _dropMarker = pulseMarker(best.boardPt.lat, best.boardPt.lon, '#22c55e', 'Board here');
+    _dropMarker = pulseMarker(best.boardPt.lat, best.boardPt.lon, '#22c55e', 'لێرە سوار ببە');
     // Drop-off point marker on destination side
     const dropPt = nearestOnRoute(ptD.lat, ptD.lon, best.name).pt;
-    _boardMarker = pulseMarker(dropPt.lat, dropPt.lon, '#22c55e', 'Ask driver to stop here');
+    _boardMarker = pulseMarker(dropPt.lat, dropPt.lon, '#22c55e', 'پێی بڵێ لێرە دابەزێنت');
 
     drawRoutes(new Set(directs.map(r=>r.name)));
     showDirect({{
@@ -663,11 +666,11 @@ function compute() {{
 
     // Drop-off circle on line A (pulsing yellow)
     _dropMarker = pulseMarker(app.ptA.lat, app.ptA.lon, '#fbbf24',
-      'Tell driver to stop here — transfer point');
+      'پێی بڵێ لێرە دابەزێنت — شوێنی گۆڕین');
 
     // Board circle on line B (pulsing blue)
     _boardMarker = pulseMarker(app.ptB.lat, app.ptB.lon, '#60a5fa',
-      'Board '+rD.name.replace(/_/g,' ')+' here');
+      'لێرە سوار ببە '+rD.name.replace(/_/g,' '));
 
     // Dashed walking line between them (only if gap > ~10m)
     if(!sameRoad && app.gapKm>0.01) {{
@@ -748,13 +751,13 @@ function compute() {{
 
     // Green dot = board Line A
     _dropMarker  = pulseMarker(rO.boardPt.lat, rO.boardPt.lon, '#22c55e',
-      'Board '+rO.name.replace(/_/g,' ')+' here');
+      'لێرە سوار ببە '+rO.name.replace(/_/g,' '));
     // Yellow dot = drop off at Bazaar from Line A
     _boardMarker = pulseMarker(bzA.lat, bzA.lon, '#fbbf24',
-      'Tell driver: "Bazar" — get off here');
+      'پێی بڵێ: بازاڕ — لەمجا دابەزە');
     // Blue dot = board Line B at Bazaar
     _walkLine    = pulseMarker(bzB.lat, bzB.lon, '#60a5fa',
-      'Board '+rD.name.replace(/_/g,' ')+' here');
+      'لێرە سوار ببە '+rD.name.replace(/_/g,' '));
     // Dashed walk between the two Bazaar points
     if(bazaarWalk>0.01) {{
       _walkLine2 = L.polyline(
@@ -777,7 +780,7 @@ function compute() {{
   }}
 
   // ── CASE 4: Truly unreachable ─────────────────────────────────────────────
-  showErr('No route found between these two points.');
+  showErr('هیچ هێڵێک نەدۆزرایەوە.');
 }}
 
 // ── Pulsing circle marker ─────────────────────────────────────────────────────
@@ -818,71 +821,71 @@ function fmtCoord(pt) {{
 
 function showDirect(r) {{
   const altHtml = r.alts.length
-    ? `<div class="ss" style="margin-top:4px;">Also works: `
+    ? `<div class="ss" style="margin-top:4px;">هەروەها دەگنجێت: `
         +r.alts.map(a=>pill(a.name.replace(/_/g,' '),COLORS[a.name]||'#888')).join(' ')
         +`</div>`
     : '';
 
   document.getElementById('result-inner').innerHTML =
-    `<div class="summary ok">✅ Direct — no transfer needed</div>`+
+    `<div class="summary ok">✅ ڕاستەوخۆ — گۆڕین پێویست نیە</div>`+
     `<div class="steps">`+
       step('🚶',
-        `Walk <strong>${{r.walkO_m}} m</strong> to the road`,
-        `Head to the <strong>${{r.labelO}}</strong> bus road `+altHtml)+
+        `پیاسە بکە <strong>${{r.walkO_m}} م</strong> بۆ کنارەی شەقام`,
+        `بڕۆ بۆ شەقامی بەسی <strong>${{r.labelO}}</strong> `+altHtml)+
       step('🚌',
-        `Raise your hand — board <strong>${{r.labelO}}</strong>`,
-        `The driver will stop when traffic allows`)+
+        `دەستت بەرز بکە — سوار ببە <strong>${{r.labelO}}</strong>`,
+        `شوفێر دەوەستێت ئەگەر ڕێگا هەبێت`)+
       step('🗣️',
-        `Tell the driver your drop-off area`,
-        `Point at your destination on the map or name the area — yellow dot shows where to ask to stop`)+
+        `پێی بڵێ کوێ دادەبەزیت`,
+        `ناوی شوێنەکە بڵێ یان بیشارەوە لەسەر نەخشەکە — خاڵی زەرد شوێنی دابەزینە`)+
       step('🚶',
-        `Walk <strong>${{r.walkD_m}} m</strong> to your destination`,
-        `You've arrived!'`)+
+        `پیاسە بکە <strong>${{r.walkD_m}} م</strong> بۆ مەوداکەت`,
+        `گەیشتیت!`)+
     `</div>`;
   document.getElementById('result-card').classList.add('show');
 }}
 
 function showTransfer(r) {{
   const xferLine = r.sameRoad
-    ? `Same road — no walking needed between buses`
-    : `Walk <strong>${{r.xferWalk_m}} m</strong> to the <strong>${{r.viaBazaar?'next bus':''+r.labelD}}</strong> road`;
+    ? `هەمان شەقام — پیاسەکردن پێویست نیە`
+    : `پیاسە بکە <strong>${{r.xferWalk_m}} م</strong> بۆ شەقامی <strong>${{r.viaBazaar?'بەسی دواتر':r.labelD}}</strong>`;
 
   const transferInstruction = r.viaBazaar
-    ? `Tell the driver: <em>"Bazar"</em> — get off at the Bazaar terminal`
-    : `Tell the driver: <em>"Stop at the ${{r.labelD}} road"</em>`;
+    ? `پێی بڵێ: <em>"بازاڕ"</em> — لە تەرمیناڵی بازاڕ دابەزە`
+    : `پێی بڵێ: <em>"لە شەقامی ${{r.labelD}} دامبەزێنم"</em>`;
 
   const dropSub = r.viaBazaar
-    ? `🟡 Yellow dot = drop off at Bazaar terminal`
-    : `🟡 Yellow dot = your drop-off / transfer point`;
+    ? `🟡 خاڵی زەرد = دابەزین لە تەرمیناڵی بازاڕ`
+    : `🟡 خاڵی زەرد = شوێنی دابەزین / گۆڕین`;
 
   const boardSub = r.viaBazaar
-    ? `🔵 Blue dot = where to board ${{r.labelD}} from the Bazaar`
-    : `🔵 Blue dot = where to board ${{r.labelD}}`;
+    ? `🔵 خاڵی شین = سواربوون لە ${{r.labelD}} لە بازاڕ`
+    : `🔵 خاڵی شین = شوێنی سواربوون لە ${{r.labelD}}`;
 
   const header = r.viaBazaar
-    ? `🔁 1 transfer — via Bazaar`
-    : `🔁 1 transfer — direct road crossing`;
+    ? `🔁 یەک گۆڕین — لە ڕێگای بازاڕ`
+    : `🔁 یەک گۆڕین — لە کەنارەی شەقام`;
 
   document.getElementById('result-inner').innerHTML =
     `<div class="summary xfr">${{header}}</div>`+
     `<div class="steps">`+
       step('🚶',
-        `Walk <strong>${{r.walkO_m}} m</strong> to the road`,
-        `Head to the <strong>${{r.labelO}}</strong> bus road — 🟢 green dot on map`)+
+        `پیاسە بکە <strong>${{r.walkO_m}} م</strong> بۆ کنارەی شەقام`,
+        `بڕۆ بۆ شەقامی بەسی <strong>${{r.labelO}}</strong> — 🟢 خاڵی سەوز لەسەر نەخشەکە`)+
       step('🚌',
-        `Raise your hand — board <strong>${{r.labelO}}</strong>`,
-        `Driver stops when traffic allows`)+
+        `دەستت بەرز بکە — سوار ببە <strong>${{r.labelO}}</strong>`,
+        `شوفێر دەوەستێت ئەگەر ڕێگا هەبێت`)+
       step('🗣️', transferInstruction, dropSub)+
       step('🚶', xferLine, boardSub)+
       step('🚌',
-        `Raise your hand — board <strong>${{r.labelD}}</strong>`,
-        `Driver stops when traffic allows`)+
+        `دەستت بەرز بکە — سوار ببە <strong>${{r.labelD}}</strong>`,
+        `شوفێر دەوەستێت ئەگەر ڕێگا هەبێت`)+
       step('🗣️',
-        `Tell the driver your destination area`,
-        `Ask to stop near your destination`)+
+        `پێی بڵێ کوێ دادەبەزیت`,
+        `داوای وەستانی نزیک مەوداکەت بکە`)+
       step('🚶',
-        `Walk <strong>${{r.walkD_m}} m</strong> to your destination`,
-        `You've arrived!`)+
+        `پیاسە بکە <strong>${{r.walkD_m}} م</strong> بۆ مەوداکەت`,
+        `گەیشتیت!`)+
     `</div>`;
   document.getElementById('result-card').classList.add('show');
 }}
