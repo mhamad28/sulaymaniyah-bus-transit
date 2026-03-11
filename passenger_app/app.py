@@ -2,24 +2,20 @@
 Suly Transit – Passenger App  (fullscreen edition)
 • Map fills 100 % of the viewport — zero Streamlit chrome
 • All UI floats over the map inside the Leaflet iframe
-• Origin / destination: click on map  OR  type lat,lon manually
+• Origin / destination: click on map  OR  type lat,lon manually  OR  use GPS
 • Route result card slides up from the bottom
 • Bus legend collapsible panel top-right
 • Live buses via Supabase Realtime
 """
 
 import json
-import math
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List
 
-import numpy as np
-import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
-# ── allow importing shared/ whether running as passenger_app/app.py or directly
 sys.path.append(str(Path(__file__).resolve().parents[1] / "shared"))
 try:
     from supabase_client import get_supabase
@@ -27,39 +23,20 @@ try:
 except ImportError:
     _SUPABASE_AVAILABLE = False
 
-st.set_page_config(
-    page_title="Suly Transit",
-    layout="wide",
-    initial_sidebar_state="collapsed",   # hide sidebar completely
-)
+st.set_page_config(page_title="Suly Transit", layout="wide", initial_sidebar_state="collapsed")
 
-# ── Kill ALL Streamlit chrome — simple reliable fullscreen ───────────────────
 st.markdown("""
 <style>
   header[data-testid="stHeader"]   { display: none !important; }
   section[data-testid="stSidebar"] { display: none !important; }
   footer                           { display: none !important; }
   .stDeployButton                  { display: none !important; }
-  div[data-testid="stTextInput"]   { display: none !important; }
-  .block-container {
-    padding: 0 !important;
-    margin: 0 !important;
-    max-width: 100% !important;
-  }
-  /* Remove all spacing around the iframe */
-  div[data-testid="stCustomComponentV1"] {
-    margin: 0 !important;
-    padding: 0 !important;
-    line-height: 0 !important;
-  }
+  .block-container { padding:0!important; margin:0!important; max-width:100%!important; }
+  div[data-testid="stCustomComponentV1"] { margin:0!important; padding:0!important; line-height:0!important; }
 </style>
 """, unsafe_allow_html=True)
 
-BASE_DIR     = Path(__file__).resolve().parent
-PROJECT_ROOT = BASE_DIR.parent
-ASSETS_DIR   = PROJECT_ROOT / "assets"
-ROUTES_FILE  = ASSETS_DIR / "bus_lines.geojson"
-
+ROUTES_FILE    = Path(__file__).resolve().parents[1] / "assets" / "bus_lines.geojson"
 DEFAULT_CENTER = [35.56, 45.43]
 DEFAULT_ZOOM   = 13
 MAX_WALK_KM    = 0.70
@@ -81,77 +58,12 @@ ROUTE_COLORS: Dict[str, str] = {
 }
 
 
-# ── Data ──────────────────────────────────────────────────────────────────────
-
 @st.cache_data(hash_funcs={Path: lambda p: p.stat().st_mtime if p.exists() else 0})
 def load_routes(path: Path) -> dict:
     if not path.exists():
         raise FileNotFoundError(f"Missing route file: {path}")
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
-
-
-@st.cache_data
-def extract_route_points(routes_geojson: dict) -> pd.DataFrame:
-    rows: List[dict] = []
-    for feature in routes_geojson.get("features", []):
-        route_name = feature.get("properties", {}).get("layer", "Unknown Route")
-        geometry   = feature.get("geometry", {})
-        geom_type  = geometry.get("type")
-        coords     = geometry.get("coordinates", [])
-        line_sets  = [coords] if geom_type == "LineString" else (
-            coords if geom_type == "MultiLineString" else []
-        )
-        for line in line_sets:
-            for idx, coord in enumerate(line):
-                if isinstance(coord, (list, tuple)) and len(coord) >= 2:
-                    rows.append({"route_name": route_name, "point_order": idx,
-                                 "lat": coord[1], "lon": coord[0]})
-    return pd.DataFrame(rows, columns=["route_name", "point_order", "lat", "lon"])
-
-
-# ── Routing ───────────────────────────────────────────────────────────────────
-
-def haversine_km(lat1, lon1, lats2, lons2):
-    r = 6371.0
-    rl1 = math.radians(lat1)
-    rl2, rn2 = np.radians(lats2), np.radians(lons2)
-    dl = rl2 - rl1
-    dn = rn2 - math.radians(lon1)
-    a  = np.sin(dl/2)**2 + np.cos(rl1) * np.cos(rl2) * np.sin(dn/2)**2
-    return r * 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
-
-
-def nearest_route(lat, lon, df) -> Optional[dict]:
-    clean = df.dropna(subset=["lat", "lon"])
-    if clean.empty:
-        return None
-    dists = haversine_km(lat, lon, clean["lat"].to_numpy(), clean["lon"].to_numpy())
-    if dists.size == 0 or np.isnan(dists).all():
-        return None
-    idx = int(np.nanargmin(dists))
-    row = clean.iloc[idx].to_dict()
-    row["distance_km"] = float(dists[idx])
-    return row
-
-
-def compute_trip(df) -> Tuple[Optional[dict], List[str]]:
-    o = st.session_state.get("origin")
-    d = st.session_state.get("destination")
-    if not o or not d:
-        return None, []
-    or_ = nearest_route(o["lat"], o["lon"], df)
-    dr_ = nearest_route(d["lat"], d["lon"], df)
-    if not or_ or not dr_:
-        return {"error": "Could not find nearby routes."}, []
-    if or_["distance_km"] > MAX_WALK_KM:
-        return {"error": f"Origin is too far from any bus route ({or_['distance_km']:.2f} km away)."}, []
-    if dr_["distance_km"] > MAX_WALK_KM:
-        return {"error": f"Destination is too far from any bus route ({dr_['distance_km']:.2f} km away)."}, []
-    result = {"origin_route": or_, "destination_route": dr_}
-    if or_["route_name"] == dr_["route_name"]:
-        return result, [or_["route_name"]]
-    return result, [or_["route_name"], dr_["route_name"]]
 
 
 def fetch_live_buses() -> list:
@@ -167,49 +79,15 @@ def fetch_live_buses() -> list:
         return []
 
 
-# ── Result JSON for the in-map result card ────────────────────────────────────
-
-def trip_result_json(trip_result) -> str:
-    if trip_result is None:
-        return "null"
-    if "error" in trip_result:
-        return json.dumps({"error": trip_result["error"]})
-    o = trip_result["origin_route"]
-    d = trip_result["destination_route"]
-    same = o["route_name"] == d["route_name"]
-    o_color = ROUTE_COLORS.get(o["route_name"], "#888")
-    d_color = ROUTE_COLORS.get(d["route_name"], "#888")
-    return json.dumps({
-        "origin_route":   o["route_name"],
-        "origin_label":   o["route_name"].replace("_", " "),
-        "origin_color":   o_color,
-        "origin_walk_m":  round(o["distance_km"] * 1000),
-        "dest_route":     d["route_name"],
-        "dest_label":     d["route_name"].replace("_", " "),
-        "dest_color":     d_color,
-        "dest_walk_m":    round(d["distance_km"] * 1000),
-        "same_route":     same,
-    })
-
-
-# ── Fullscreen Leaflet HTML ───────────────────────────────────────────────────
-
-def build_map_html(routes_geojson: dict, highlight: List[str],
-                   origin, destination,
-                   trip_result,
-                   live_buses: list,
+def build_map_html(routes_geojson: dict, live_buses: list,
                    supabase_url: str, supabase_key: str) -> str:
 
     geojson_str  = json.dumps(routes_geojson)
     colors_str   = json.dumps(ROUTE_COLORS)
-    origin_str   = json.dumps(origin)
-    dest_str     = json.dumps(destination)
     buses_str    = json.dumps(live_buses)
     legend_items = json.dumps([
-        {"name": k.replace("_", " "), "color": v}
-        for k, v in ROUTE_COLORS.items()
+        {"name": k.replace("_", " "), "color": v} for k, v in ROUTE_COLORS.items()
     ])
-
 
     return f"""<!DOCTYPE html>
 <html>
@@ -223,58 +101,61 @@ def build_map_html(routes_geojson: dict, highlight: List[str],
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 * {{ margin:0; padding:0; box-sizing:border-box; }}
-html, body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
-  font-family: 'Noto Naskh Arabic', system-ui, sans-serif; }}
+html,body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
+  font-family:'Noto Naskh Arabic',system-ui,sans-serif; }}
 #map {{ width:100%; height:100vh; }}
 
-/* glass card base */
 .card {{
-  background: rgba(10,16,26,0.88);
-  backdrop-filter: blur(16px);
-  border: 1px solid rgba(255,255,255,0.10);
-  border-radius: 14px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
-  color: #e2eaf4;
+  background:rgba(10,16,26,0.88); backdrop-filter:blur(16px);
+  border:1px solid rgba(255,255,255,0.10); border-radius:14px;
+  box-shadow:0 8px 32px rgba(0,0,0,0.5); color:#e2eaf4;
 }}
 
 /* ── TOP PANEL ── */
 #top-panel {{
-  position: absolute; top: 14px; left: 50%;
-  transform: translateX(-50%);
-  z-index: 1000; width: min(500px, 92vw);
-  padding: 12px 14px;
-  display: flex; flex-direction: column; gap: 8px;
+  position:absolute; top:14px; left:50%; transform:translateX(-50%);
+  z-index:1000; width:min(520px,92vw); padding:12px 14px;
+  display:flex; flex-direction:column; gap:8px;
 }}
 .row {{ display:flex; align-items:center; gap:8px; }}
-.dot {{ width:11px; height:11px; border-radius:50%; flex-shrink:0;
-  border:2px solid rgba(255,255,255,.5); }}
+.dot {{ width:11px; height:11px; border-radius:50%; flex-shrink:0; border:2px solid rgba(255,255,255,.5); }}
 .pick-btn {{
   flex-shrink:0; padding:6px 13px; border-radius:8px; border:1.5px solid;
   font-size:12px; font-weight:700; cursor:pointer; background:transparent;
-  transition:all .15s; white-space:nowrap;
+  transition:all .15s; white-space:nowrap; font-family:'Noto Naskh Arabic',sans-serif;
 }}
 .pick-btn:hover {{ filter:brightness(1.2); transform:translateY(-1px); }}
 .pick-btn.green {{ border-color:#22c55e; color:#4ade80; }}
-.pick-btn.green.on {{ background:#22c55e; color:#000;
-  box-shadow:0 0 12px rgba(34,197,94,.5); }}
+.pick-btn.green.on {{ background:#22c55e; color:#000; box-shadow:0 0 12px rgba(34,197,94,.5); }}
 .pick-btn.red {{ border-color:#ef4444; color:#f87171; }}
-.pick-btn.red.on {{ background:#ef4444; color:#fff;
-  box-shadow:0 0 12px rgba(239,68,68,.5); }}
-.coord-box {{
-  flex:1; min-width:0;
-  background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.13);
-  border-radius:8px; padding:7px 10px;
-  font-size:12px; font-family:monospace; color:#e2eaf4;
-  outline:none; transition:border-color .15s;
-  direction: ltr;  /* coords are always LTR (numbers) */
+.pick-btn.red.on {{ background:#ef4444; color:#fff; box-shadow:0 0 12px rgba(239,68,68,.5); }}
+
+/* GPS button */
+.gps-btn {{
+  flex-shrink:0; width:32px; height:32px; border-radius:8px;
+  border:1.5px solid rgba(96,165,250,.5); background:rgba(96,165,250,.08);
+  color:#60a5fa; font-size:15px; cursor:pointer;
+  display:flex; align-items:center; justify-content:center; transition:all .2s;
 }}
-.coord-box::placeholder {{ color:#475569; direction: rtl; font-family: 'Noto Naskh Arabic', sans-serif; }}
+.gps-btn:hover {{ background:rgba(96,165,250,.2); border-color:#60a5fa; }}
+.gps-btn.locating {{ animation:gps-pulse 1s infinite; background:rgba(96,165,250,.2); }}
+.gps-btn.located  {{ background:rgba(34,197,94,.15); border-color:#22c55e; color:#4ade80; }}
+@keyframes gps-pulse {{
+  0%,100% {{ box-shadow:0 0 0 0 rgba(96,165,250,.5); }}
+  50%      {{ box-shadow:0 0 0 6px rgba(96,165,250,0); }}
+}}
+
+.coord-box {{
+  flex:1; min-width:0; background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.13);
+  border-radius:8px; padding:7px 10px; font-size:12px; font-family:monospace;
+  color:#e2eaf4; outline:none; transition:border-color .15s; direction:ltr;
+}}
+.coord-box::placeholder {{ color:#475569; direction:rtl; font-family:'Noto Naskh Arabic',sans-serif; }}
 .coord-box:focus {{ border-color:#00d4ff; }}
 .x-btn {{
   flex-shrink:0; width:24px; height:24px; border-radius:50%;
   border:1px solid rgba(255,255,255,.15); background:rgba(255,255,255,.06);
-  color:#64748b; font-size:12px; cursor:pointer; line-height:1;
-  transition:all .15s;
+  color:#64748b; font-size:12px; cursor:pointer; line-height:1; transition:all .15s;
 }}
 .x-btn:hover {{ background:rgba(255,255,255,.18); color:#e2eaf4; }}
 .hr {{ height:1px; background:rgba(255,255,255,.08); }}
@@ -282,178 +163,70 @@ html, body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
   background:transparent; border:1px solid rgba(148,163,184,.3);
   border-radius:7px; color:#94a3b8; font-size:11px; font-weight:600;
   padding:4px 14px; cursor:pointer; margin-left:auto; transition:all .15s;
+  font-family:'Noto Naskh Arabic',sans-serif;
 }}
 .reset-btn:hover {{ background:rgba(148,163,184,.15); color:#e2eaf4; }}
-
-/* GPS location button */
-.gps-btn {{
-  flex-shrink:0; width:30px; height:30px; border-radius:8px;
-  border:1.5px solid rgba(96,165,250,.5); background:rgba(96,165,250,.08);
-  color:#60a5fa; font-size:14px; cursor:pointer; line-height:1;
-  display:flex; align-items:center; justify-content:center;
-  transition:all .2s;
-}}
-.gps-btn:hover {{ background:rgba(96,165,250,.2); border-color:#60a5fa; }}
-.gps-btn.locating {{
-  animation:gps-pulse 1s infinite;
-  background:rgba(96,165,250,.25); border-color:#60a5fa;
-}}
-.gps-btn.located {{
-  background:rgba(34,197,94,.15); border-color:#22c55e; color:#4ade80;
-}}
-@keyframes gps-pulse {{
-  0%,100% {{ box-shadow:0 0 0 0 rgba(96,165,250,.5); }}
-  50%      {{ box-shadow:0 0 0 6px rgba(96,165,250,0); }}
-}}
-
-/* crosshair when picking */
 .picking {{ cursor:crosshair !important; }}
 
 /* ── RESULT CARD ── */
 #result-card {{
-  position: absolute;
-  z-index: 1000;
-  pointer-events: none;
-  transition: all .4s cubic-bezier(.34,1.56,.64,1);
+  position:absolute; z-index:1000; pointer-events:none;
+  transition:all .4s cubic-bezier(.34,1.56,.64,1);
 }}
-
-/* ── FLOAT mode (default) — centred above bottom ── */
 #result-card.float {{
-  bottom: 20px; left: 50%;
-  transform: translateX(-50%) translateY(300px);
-  width: min(460px, 92vw);
-  padding: 14px 16px;
-  max-height: 60vh; overflow-y: auto;
+  bottom:20px; left:50%; transform:translateX(-50%) translateY(300px);
+  width:min(460px,92vw); padding:14px 16px; max-height:60vh; overflow-y:auto;
 }}
-#result-card.float.show {{
-  transform: translateX(-50%) translateY(0);
-  pointer-events: all;
-}}
-
-/* ── BOTTOM mode — full-width horizontal strip ── */
+#result-card.float.show {{ transform:translateX(-50%) translateY(0); pointer-events:all; }}
 #result-card.bottom {{
-  bottom: 0; left: 0; right: 0;
-  width: 100%; border-radius: 16px 16px 0 0;
-  transform: translateY(100%);
-  padding: 12px 16px 16px;
-  max-height: 38vh; overflow-y: auto;
+  bottom:0; left:0; right:0; width:100%; border-radius:16px 16px 0 0;
+  transform:translateY(100%); padding:12px 16px 16px; max-height:38vh; overflow-y:auto;
 }}
-#result-card.bottom.show {{
-  transform: translateY(0);
-  pointer-events: all;
-}}
-#result-card.bottom .legs {{
-  flex-direction: row; flex-wrap: nowrap;
-  overflow-x: auto; gap: 8px;
-  padding-bottom: 4px;
-}}
-#result-card.bottom .legs::-webkit-scrollbar {{ height: 3px; }}
-#result-card.bottom .legs::-webkit-scrollbar-thumb {{
-  background: rgba(255,255,255,.15); border-radius: 2px; }}
-#result-card.bottom .leg {{
-  min-width: 150px; max-width: 170px; flex-shrink: 0;
-}}
-#result-card.bottom .leg-chip {{ font-size: 10px; padding: 2px 7px; }}
-#result-card.bottom .leg-label {{ font-size: 11px; }}
-#result-card.bottom .summary {{ margin-bottom: 8px; }}
-
-/* ── MINIMIZED mode — just the summary bar ── */
-#result-card.minimized {{
-  bottom: 20px; left: 50%;
-  transform: translateX(-50%);
-  width: min(460px, 92vw);
-  padding: 0;
-  pointer-events: all;
-  transition: all .3s ease;
-}}
-#result-card.minimized .steps {{ display: none; }}
-#result-card.minimized .summary {{ margin-bottom: 0; border-radius: 10px; }}
-
-/* toggle button — sits in top-right of result card */
+#result-card.bottom.show {{ transform:translateY(0); pointer-events:all; }}
 #result-toggle {{
-  position: absolute; top: 8px; left: 10px;
-  background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.15);
-  border-radius: 6px; color: #94a3b8; font-size: 11px; font-weight: 600;
-  padding: 3px 8px; cursor: pointer; z-index: 10;
-  display: flex; align-items: center; gap: 4px;
-  transition: all .15s;
+  position:absolute; top:8px; left:10px;
+  background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.15);
+  border-radius:6px; color:#94a3b8; font-size:11px; font-weight:600;
+  padding:3px 8px; cursor:pointer; z-index:10; display:flex; align-items:center; gap:4px;
+  transition:all .15s; font-family:'Noto Naskh Arabic',sans-serif;
 }}
-#result-toggle:hover {{ background: rgba(255,255,255,.16); color: #e2eaf4; }}
-
+#result-toggle:hover {{ background:rgba(255,255,255,.16); color:#e2eaf4; }}
 .summary {{
   text-align:center; font-size:13px; font-weight:700;
   padding:7px 12px; border-radius:8px; margin-bottom:10px;
-  position: relative;
 }}
-.summary.ok  {{ background:rgba(34,197,94,.15); border:1px solid rgba(34,197,94,.3); color:#4ade80; }}
+.summary.ok  {{ background:rgba(34,197,94,.15);  border:1px solid rgba(34,197,94,.3);  color:#4ade80; }}
 .summary.xfr {{ background:rgba(251,191,36,.13); border:1px solid rgba(251,191,36,.3); color:#fbbf24; }}
 .summary.err {{ background:rgba(239,68,68,.13);  border:1px solid rgba(239,68,68,.3);  color:#f87171; }}
-.steps {{ display:flex; flex-direction:column; gap:6px; }}
-.step {{
-  display:flex; align-items:flex-start; gap:10px;
-  padding:8px 10px; border-radius:8px;
-  background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.07);
-}}
-.si {{ font-size:15px; flex-shrink:0; line-height:1.5; }}
-.sb {{ display:flex; flex-direction:column; gap:2px; }}
-.sm {{ font-size:13px; color:#e2eaf4; font-weight:500; }}
-.ss {{ font-size:11px; color:#64748b; }}
-.pill {{
-  display:inline-block; font-size:11px; font-weight:700;
-  padding:1px 8px; border-radius:12px;
-}}
 
-/* ── COMPACT LEG CARDS ── */
+/* ── LEG CARDS ── */
 .legs {{ display:flex; flex-direction:column; gap:5px; }}
 .leg {{
-  border-radius:10px; overflow:hidden;
-  background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.08);
-  cursor:pointer; transition:background .15s;
-  user-select:none;
+  border-radius:10px; overflow:hidden; background:rgba(255,255,255,.05);
+  border:1px solid rgba(255,255,255,.08); cursor:pointer; transition:background .15s; user-select:none;
 }}
 .leg:hover {{ background:rgba(255,255,255,.09); }}
-.leg-top {{
-  display:flex; align-items:center; gap:8px;
-  padding:10px 12px;
-}}
+.leg-top {{ display:flex; align-items:center; gap:8px; padding:10px 12px; }}
 .leg-chips {{ display:flex; align-items:center; gap:4px; flex-shrink:0; }}
-.leg-chip {{
-  font-size:11px; font-weight:700; padding:3px 9px;
-  border-radius:20px; border:1.5px solid; white-space:nowrap;
-}}
-.leg-chip.walk {{
-  background:rgba(148,163,184,.1); border-color:rgba(148,163,184,.3); color:#94a3b8;
-}}
-.leg-chip.xfer {{
-  background:rgba(251,191,36,.1); border-color:rgba(251,191,36,.3); color:#fbbf24;
-  padding:3px 7px;
-}}
+.leg-chip {{ font-size:11px; font-weight:700; padding:3px 9px; border-radius:20px; border:1.5px solid; white-space:nowrap; }}
+.leg-chip.walk {{ background:rgba(148,163,184,.1); border-color:rgba(148,163,184,.3); color:#94a3b8; }}
+.leg-chip.xfer {{ background:rgba(251,191,36,.1); border-color:rgba(251,191,36,.3); color:#fbbf24; padding:3px 7px; }}
 .leg-arr {{ color:#475569; font-size:12px; margin:0 1px; }}
-.leg-label {{
-  flex:1; font-size:12px; color:#e2eaf4; font-weight:500; line-height:1.4;
-  direction:rtl;
-}}
-.leg-caret {{
-  color:#475569; font-size:14px; transition:transform .2s; flex-shrink:0;
-}}
+.leg-label {{ flex:1; font-size:12px; color:#e2eaf4; font-weight:500; line-height:1.4; direction:rtl; }}
+.leg-caret {{ color:#475569; font-size:14px; transition:transform .2s; flex-shrink:0; }}
 .leg.open .leg-caret {{ transform:rotate(90deg); }}
 .leg-detail {{
-  display:none; padding:0 12px 10px;
-  font-size:11px; color:#64748b; line-height:1.5;
-  border-top:1px solid rgba(255,255,255,.05); padding-top:8px;
-  direction:rtl;
+  display:none; padding:8px 12px 10px; font-size:11px; color:#64748b; line-height:1.5;
+  border-top:1px solid rgba(255,255,255,.05); direction:rtl;
 }}
 .leg.open .leg-detail {{ display:block; }}
 
 /* ── LEGEND ── */
 #leg-btn {{
-  position:absolute; top:14px; right:14px; z-index:1001;
-  width:38px; height:38px; border-radius:10px;
-  background:rgba(10,16,26,.88); backdrop-filter:blur(14px);
-  border:1px solid rgba(255,255,255,.10); color:#e2eaf4;
-  font-size:18px; cursor:pointer;
-  display:flex; align-items:center; justify-content:center;
-  box-shadow:0 4px 16px rgba(0,0,0,.4);
+  position:absolute; top:14px; right:14px; z-index:1001; width:38px; height:38px;
+  border-radius:10px; background:rgba(10,16,26,.88); backdrop-filter:blur(14px);
+  border:1px solid rgba(255,255,255,.10); color:#e2eaf4; font-size:18px; cursor:pointer;
+  display:flex; align-items:center; justify-content:center; box-shadow:0 4px 16px rgba(0,0,0,.4);
 }}
 #leg-panel {{
   position:absolute; top:60px; right:14px; z-index:1000;
@@ -472,11 +245,8 @@ html, body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
   background:rgba(10,16,26,.88); backdrop-filter:blur(14px);
   display:flex; align-items:center; gap:6px;
 }}
-.ld-dot {{ width:7px; height:7px; border-radius:50%; background:#22c55e;
-  animation:blink 1.4s infinite; }}
+.ld-dot {{ width:7px; height:7px; border-radius:50%; background:#22c55e; animation:blink 1.4s infinite; }}
 @keyframes blink {{ 0%,100%{{opacity:1;}} 50%{{opacity:.2;}} }}
-
-/* leaflet zoom */
 .leaflet-control-zoom {{ border:none !important; }}
 .leaflet-control-zoom a {{
   background:rgba(10,16,26,.88) !important; color:#e2eaf4 !important;
@@ -492,7 +262,7 @@ html, body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
   <div class="row">
     <span class="dot" style="background:#22c55e"></span>
     <button class="pick-btn green" id="btn-o" onclick="toggleMode('origin')">📍 هەڵبژێرە</button>
-    <button class="gps-btn" id="btn-gps" onclick="useMyLocation()" title="بنکەکەت بەئۆتۆماتیکی دیاری بکە">📡</button>
+    <button class="gps-btn" id="btn-gps" onclick="useMyLocation()" title="شوێنی ئێستات بەکاربهێنە">📡</button>
     <input class="coord-box" id="inp-o" placeholder="بنکە — کۆدینەیت لە گووگڵ مەپ لێرە بنووسە"
            oninput="onCoordInput('origin', this.value)"/>
     <button class="x-btn" onclick="clearPt('origin')">✕</button>
@@ -512,13 +282,12 @@ html, body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
 <!-- LEGEND -->
 <button id="leg-btn" onclick="toggleLeg()">🗺</button>
 <div id="leg-panel" class="card">
-  <div style="font-size:9px;font-weight:700;letter-spacing:.05em;color:#475569;
-    margin-bottom:4px;">هێڵەکانی بەس</div>
+  <div style="font-size:9px;font-weight:700;letter-spacing:.05em;color:#475569;margin-bottom:4px;">هێڵەکانی بەس</div>
 </div>
 
-<!-- RESULT -->
+<!-- RESULT CARD -->
 <div id="result-card" class="card float" dir="rtl" lang="ckb">
-  <button id="result-toggle" onclick="cycleResultMode()">⊟ کەمکردنەوە</button>
+  <button id="result-toggle" onclick="cycleResultMode()" style="display:none">▤ خوارەوە</button>
   <div id="result-inner"></div>
 </div>
 
@@ -529,35 +298,33 @@ html, body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
 const COLORS   = {colors_str};
 const GEOJSON  = {geojson_str};
 const LEGEND   = {legend_items};
-const INIT_O   = {origin_str};
-const INIT_D   = {dest_str};
 const BUSES    = {buses_str};
 const SUPA_URL = "{supabase_url}";
 const SUPA_KEY = "{supabase_key}";
 const MAX_WALK = {MAX_WALK_KM};
 
 // ── Map ───────────────────────────────────────────────────────────────────────
-const map = L.map('map',{{center:[{DEFAULT_CENTER[0]},{DEFAULT_CENTER[1]}],
-  zoom:{DEFAULT_ZOOM},minZoom:10,maxZoom:19}});
+const map = L.map('map', {{
+  center: [{DEFAULT_CENTER[0]}, {DEFAULT_CENTER[1]}],
+  zoom: {DEFAULT_ZOOM}, minZoom: 10, maxZoom: 19
+}});
 L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',
-  {{attribution:'© OpenStreetMap',maxZoom:19}}).addTo(map);
+  {{attribution:'© OpenStreetMap', maxZoom:19}}).addTo(map);
 
-// ── Route layer (re-drawn on highlight change) ────────────────────────────────
+// ── Routes ────────────────────────────────────────────────────────────────────
 let routeLayer = null;
 function drawRoutes(active) {{
-  if (routeLayer) map.removeLayer(routeLayer);
+  if(routeLayer) map.removeLayer(routeLayer);
   routeLayer = L.geoJSON(GEOJSON, {{
     style: f => {{
       const n = (f.properties && f.properties.layer) || '';
       const c = COLORS[n] || '#3388ff';
-      if (active && active.size > 0)
-        return active.has(n)
-          ? {{color:c, weight:7, opacity:1.0}}
-          : {{color:c, weight:2, opacity:0.13}};
+      if(active && active.size > 0)
+        return active.has(n) ? {{color:c, weight:7, opacity:1.0}}
+                             : {{color:c, weight:2, opacity:0.13}};
       return {{color:c, weight:4, opacity:0.88}};
     }},
-    onEachFeature:(f,l) => l.bindTooltip(
-      (f.properties&&f.properties.layer)||'Route', {{sticky:true}})
+    onEachFeature: (f,l) => l.bindTooltip((f.properties&&f.properties.layer)||'Route', {{sticky:true}})
   }}).addTo(map);
 }}
 drawRoutes(null);
@@ -572,88 +339,74 @@ LEGEND.forEach(item => {{
 }});
 function toggleLeg() {{ legPanel.classList.toggle('open'); }}
 
-// ── Markers ───────────────────────────────────────────────────────────────────
+// ── Pin markers ───────────────────────────────────────────────────────────────
 function pinIcon(color) {{
   return L.divIcon({{
-    html:`<div style="width:16px;height:16px;border-radius:50%;
-      background:${{color}};border:3px solid #fff;
-      box-shadow:0 0 8px ${{color}}"></div>`,
+    html: `<div style="width:16px;height:16px;border-radius:50%;background:${{color}};border:3px solid #fff;box-shadow:0 0 8px ${{color}}"></div>`,
     iconSize:[16,16], iconAnchor:[8,8], className:''
   }});
 }}
-let mO=null, mD=null;
-function placeO(lat,lon) {{
+let mO = null, mD = null;
+function placeO(lat, lon) {{
   if(mO) map.removeLayer(mO);
-  mO = L.marker([lat,lon],{{icon:pinIcon('#22c55e')}}).bindTooltip('Origin').addTo(map);
+  mO = L.marker([lat,lon], {{icon:pinIcon('#22c55e')}}).bindTooltip('Origin').addTo(map);
 }}
-function placeD(lat,lon) {{
+function placeD(lat, lon) {{
   if(mD) map.removeLayer(mD);
-  mD = L.marker([lat,lon],{{icon:pinIcon('#ef4444')}}).bindTooltip('Destination').addTo(map);
+  mD = L.marker([lat,lon], {{icon:pinIcon('#ef4444')}}).bindTooltip('Destination').addTo(map);
 }}
-if(INIT_O) {{ placeO(INIT_O.lat,INIT_O.lon); }}
-if(INIT_D) {{ placeD(INIT_D.lat,INIT_D.lon); }}
 
 // ── Live buses ────────────────────────────────────────────────────────────────
 const busM = {{}};
-function busIcon(color,num) {{
+function busIcon(color, num) {{
   return L.divIcon({{
-    html:`<div style="background:${{color}};color:#fff;font-size:9px;font-weight:700;
-      padding:3px 7px;border-radius:6px;border:2px solid #fff;
-      box-shadow:0 0 8px ${{color}};white-space:nowrap;">${{num}}</div>`,
+    html: `<div style="background:${{color}};color:#fff;font-size:9px;font-weight:700;padding:3px 7px;border-radius:6px;border:2px solid #fff;box-shadow:0 0 8px ${{color}};white-space:nowrap;">${{num}}</div>`,
     className:'', iconAnchor:[20,12]
   }});
 }}
 function placeBus(b) {{
-  const c = COLORS[b.bus_line]||'#00d4ff';
+  const c = COLORS[b.bus_line] || '#00d4ff';
   const tip = b.bus_number+' · '+(b.bus_line||'').replace(/_/g,' ')+' · '+Math.round(b.speed_kmh||0)+' km/h';
-  if(busM[b.bus_number]) {{ busM[b.bus_number].setLatLng([b.lat,b.lon]); busM[b.bus_number].setTooltipContent(tip); }}
-  else busM[b.bus_number]=L.marker([b.lat,b.lon],{{icon:busIcon(c,b.bus_number),zIndexOffset:500}}).bindTooltip(tip).addTo(map);
-  document.getElementById('bus-ct').textContent=Object.keys(busM).length+' بەس زیندوو';
+  if(busM[b.bus_number]) {{
+    busM[b.bus_number].setLatLng([b.lat,b.lon]);
+    busM[b.bus_number].setTooltipContent(tip);
+  }} else {{
+    busM[b.bus_number] = L.marker([b.lat,b.lon], {{icon:busIcon(c,b.bus_number), zIndexOffset:500}})
+      .bindTooltip(tip).addTo(map);
+  }}
+  document.getElementById('bus-ct').textContent = Object.keys(busM).length + ' بەس زیندوو';
 }}
 BUSES.forEach(placeBus);
-if(SUPA_URL&&SUPA_KEY) {{
-  const {{createClient}}=supabase;
-  const sb=createClient(SUPA_URL,SUPA_KEY,{{auth:{{persistSession:false}}}});
-  sb.channel('buses').on('postgres_changes',{{event:'*',schema:'public',table:'active_locations'}},p=>{{
-    const b=p.new; if(!b) return;
-    if(b.is_active) placeBus(b);
-    else if(busM[b.bus_number]) {{ map.removeLayer(busM[b.bus_number]); delete busM[b.bus_number]; }}
-  }}).subscribe();
+if(SUPA_URL && SUPA_KEY) {{
+  const {{createClient}} = supabase;
+  const sb = createClient(SUPA_URL, SUPA_KEY, {{auth:{{persistSession:false}}}});
+  sb.channel('buses').on('postgres_changes',
+    {{event:'*', schema:'public', table:'active_locations'}}, p => {{
+      const b = p.new; if(!b) return;
+      if(b.is_active) placeBus(b);
+      else if(busM[b.bus_number]) {{ map.removeLayer(busM[b.bus_number]); delete busM[b.bus_number]; }}
+    }}).subscribe();
 }}
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  ROUTING ENGINE
-//
-//  Real Sulaymaniyah bus model:
-//  • No fixed stops — wave down the bus anywhere along its road
-//  • Tell the driver where to drop you off
-//  • Transfer = the two route lines physically share the same road
-//               (any point on line A within XFER_THRESH of any point on line B)
-//  • If lines share a road → drop off there, board next bus on same road (0m walk)
-//  • If closest approach is 50–200m → short walk between the two roads
-//  • If lines never come close → impossible transfer, not suggested
+//  ROUTING ENGINE  (pure JS — zero Streamlit reruns)
 // ══════════════════════════════════════════════════════════════════════════════
+const XFER_MAX_KM = 0.05;   // 50m max gap for transfer
+const XFER_SAME   = 0.015;  // 15m = same road
 
-const XFER_MAX_KM = 0.05;   // 50 m — max gap between lines to consider a valid transfer
-const XFER_SAME   = 0.015;  // 15 m — within this = literally same road, no walking
-
-// Build per-route point arrays  routeName → [{{lat,lon}}, ...]
 const ROUTE_PTS = Object.create(null);
-for (const f of GEOJSON.features||[]) {{
-  const name = (f.properties&&f.properties.layer)||'';
-  if(!name) continue;
-  if(!ROUTE_PTS[name]) ROUTE_PTS[name]=[];
-  const geom = f.geometry||{{}};
+for(const f of GEOJSON.features||[]) {{
+  const name = (f.properties && f.properties.layer) || ''; if(!name) continue;
+  if(!ROUTE_PTS[name]) ROUTE_PTS[name] = [];
+  const geom = f.geometry || {{}};
   const segs = geom.type==='LineString'      ? [geom.coordinates]
              : geom.type==='MultiLineString' ?  geom.coordinates : [];
-  for (const seg of segs)
-    for (const c of seg)
-      if(Array.isArray(c)&&c.length>=2)
-        ROUTE_PTS[name].push({{lat:c[1], lon:c[0]}});
+  for(const seg of segs)
+    for(const c of seg)
+      if(Array.isArray(c) && c.length>=2) ROUTE_PTS[name].push({{lat:c[1], lon:c[0]}});
 }}
 const ROUTE_NAMES = Object.keys(ROUTE_PTS);
 
-// ── Haversine km ─────────────────────────────────────────────────────────────
 function hav(la1,lo1,la2,lo2) {{
   const R=6371, r=Math.PI/180;
   const dla=(la2-la1)*r, dlo=(lo2-lo1)*r;
@@ -661,466 +414,252 @@ function hav(la1,lo1,la2,lo2) {{
   return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
 }}
 
-// Nearest point on a named route to (lat,lon) — returns {{km, pt}}
 function nearestOnRoute(lat, lon, name) {{
   let best=Infinity, bestPt=null;
-  for (const p of (ROUTE_PTS[name]||[])) {{
+  for(const p of (ROUTE_PTS[name]||[])) {{
     const d=hav(lat,lon,p.lat,p.lon);
     if(d<best){{best=d; bestPt=p;}}
   }}
   return {{km:best, pt:bestPt}};
 }}
 
-// All routes reachable on foot within maxKm, sorted by distance
 function nearbyRoutes(lat, lon, maxKm) {{
   const out=[];
-  for (const name of ROUTE_NAMES) {{
+  for(const name of ROUTE_NAMES) {{
     const {{km,pt}}=nearestOnRoute(lat,lon,name);
     if(km<=maxKm) out.push({{name,km,boardPt:pt}});
   }}
   return out.sort((a,b)=>a.km-b.km);
 }}
 
-// ── Transfer geometry ─────────────────────────────────────────────────────────
-// True closest approach — scans ALL point pairs between two routes.
-// 13 routes × ~200 pts each → ~78 pairs × 40k comparisons = ~3M ops, < 50ms.
 function closestApproach(nameA, nameB) {{
-  const ptsA = ROUTE_PTS[nameA]||[];
-  const ptsB = ROUTE_PTS[nameB]||[];
+  const ptsA=ROUTE_PTS[nameA]||[], ptsB=ROUTE_PTS[nameB]||[];
   if(!ptsA.length||!ptsB.length) return {{gapKm:Infinity,ptA:null,ptB:null}};
-
   let best=Infinity, ptA=ptsA[0], ptB=ptsB[0];
-  for (let i=0; i<ptsA.length; i++) {{
+  for(let i=0;i<ptsA.length;i++) {{
     const la=ptsA[i].lat, lo=ptsA[i].lon;
-    for (let j=0; j<ptsB.length; j++) {{
-      const d = hav(la,lo,ptsB[j].lat,ptsB[j].lon);
-      if(d<best){{ best=d; ptA=ptsA[i]; ptB=ptsB[j]; }}
+    for(let j=0;j<ptsB.length;j++) {{
+      const d=hav(la,lo,ptsB[j].lat,ptsB[j].lon);
+      if(d<best){{best=d; ptA=ptsA[i]; ptB=ptsB[j];}}
     }}
   }}
   return {{gapKm:best, ptA, ptB}};
 }}
 
-// Pre-compute approach table at startup (once, cached)
 const APPROACH = Object.create(null);
-for (const a of ROUTE_NAMES) {{
+for(const a of ROUTE_NAMES) {{
   APPROACH[a] = Object.create(null);
-  for (const b of ROUTE_NAMES) {{
+  for(const b of ROUTE_NAMES) {{
     if(a!==b) APPROACH[a][b] = closestApproach(a,b);
   }}
 }}
 
-// ── OSRM walking distance ─────────────────────────────────────────────────────
-// Calls the public OSRM API for a walking route between two points.
-// Returns distance in metres, or null on failure.
-const OSRM = 'https://router.project-osrm.org/route/v1/foot';
-
-async function walkingDist(fromLat, fromLon, toLat, toLon) {{
-  try {{
-    const url = `${{OSRM}}/${{fromLon}},${{fromLat}};${{toLon}},${{toLat}}?overview=false`;
-    const res = await fetch(url);
-    const data = await res.json();
-    if(data.code==='Ok' && data.routes&&data.routes[0])
-      return Math.round(data.routes[0].distance);
-  }} catch(e) {{}}
-  return null;   // fallback to straight-line
-}}
-
-// Update distance labels in the result card after OSRM responds — inline per caller
-
-// Transfer map layers
+// ── State ─────────────────────────────────────────────────────────────────────
+let ptO=null, ptD=null;
 let _dropMarker=null, _boardMarker=null, _walkLine=null, _walkLine2=null;
 function clearXferLayers() {{
   [_dropMarker,_boardMarker,_walkLine,_walkLine2].forEach(l=>{{if(l)map.removeLayer(l);}});
   _dropMarker=_boardMarker=_walkLine=_walkLine2=null;
 }}
 
-// ── Main compute ─────────────────────────────────────────────────────────────
+// ── Compute route ─────────────────────────────────────────────────────────────
 function compute() {{
   clearXferLayers();
   if(!ptO||!ptD) {{ hideResult(); return; }}
 
-  const atO = nearbyRoutes(ptO.lat, ptO.lon, MAX_WALK);
-  const atD = nearbyRoutes(ptD.lat, ptD.lon, MAX_WALK);
+  const atO=nearbyRoutes(ptO.lat,ptO.lon,MAX_WALK);
+  const atD=nearbyRoutes(ptD.lat,ptD.lon,MAX_WALK);
 
-  if(!atO.length) {{
-    showErr('دەستپێکردنت زیاتر لە '+Math.round(MAX_WALK*1000)+' م دوورە لە هیچ هێڵێک'); return;
-  }}
-  if(!atD.length) {{
-    showErr('مەوداکەت زیاتر لە '+Math.round(MAX_WALK*1000)+' م دوورە لە هیچ هێڵێک'); return;
-  }}
+  if(!atO.length) {{ showErr('دەستپێکردنت زیاتر لە '+Math.round(MAX_WALK*1000)+' م دوورە لە هیچ هێڵێک'); return; }}
+  if(!atD.length) {{ showErr('مەوداکەت زیاتر لە '+Math.round(MAX_WALK*1000)+' م دوورە لە هیچ هێڵێک'); return; }}
 
   const namesAtD = new Set(atD.map(r=>r.name));
 
-  // ── CASE 1: Direct ────────────────────────────────────────────────────────
+  // CASE 1: Direct
   const directs = atO.filter(r=>namesAtD.has(r.name));
   if(directs.length>0) {{
-    // Pick the one that minimises total walk (origin walk + destination walk)
     let best=null, bestTotal=Infinity;
-    for (const r of directs) {{
-      const wD = atD.find(x=>x.name===r.name).km;
-      const t = r.km+wD;
-      if(t<bestTotal){{bestTotal=t;best=r;}}
+    for(const r of directs) {{
+      const wD=atD.find(x=>x.name===r.name).km;
+      if(r.km+wD<bestTotal){{bestTotal=r.km+wD; best=r;}}
     }}
-    const walkD = atD.find(r=>r.name===best.name).km;
-    const alts  = directs.filter(r=>r.name!==best.name);
-
-    // Board point marker on origin route
-    _dropMarker = pulseMarker(best.boardPt.lat, best.boardPt.lon, '#22c55e', 'سەر پاسەکە کەوە');
-    // Drop-off point marker on destination side
-    const dropPt = nearestOnRoute(ptD.lat, ptD.lon, best.name).pt;
-    _boardMarker = pulseMarker(dropPt.lat, dropPt.lon, '#22c55e', 'بڵێ: دابەزین هەیە');
-
+    const walkD=atD.find(r=>r.name===best.name).km;
+    const alts=directs.filter(r=>r.name!==best.name);
+    _dropMarker=pulseMarker(best.boardPt.lat,best.boardPt.lon,'#22c55e','سەر پاسەکە کەوە');
+    const dropPt=nearestOnRoute(ptD.lat,ptD.lon,best.name).pt;
+    _boardMarker=pulseMarker(dropPt.lat,dropPt.lon,'#22c55e','بڵێ: دابەزین هەیە');
     drawRoutes(new Set(directs.map(r=>r.name)));
-    showDirect({{
-      lineO:   best.name,
-      labelO:  best.name.replace(/_/g,' '),
-      colorO:  COLORS[best.name]||'#888',
-      walkO_m: Math.round(best.km*1000),
-      walkD_m: Math.round(walkD*1000),
-      boardPt: best.boardPt,
-      dropPt,
-      alts,
-    }});
+    showDirect({{lineO:best.name, labelO:best.name.replace(/_/g,' '),
+      walkO_m:Math.round(best.km*1000), walkD_m:Math.round(walkD*1000),
+      boardPt:best.boardPt, dropPt, alts}});
     return;
   }}
 
-  // ── CASE 2: 1 transfer — lines physically cross ───────────────────────────
-  // Find the pair (lineA from atO, lineB from atD) with:
-  //   1. A valid crossing (gapKm ≤ XFER_MAX_KM)
-  //   2. Minimum score = walkO + gapKm + walkD
+  // CASE 2: 1 transfer — road crossing
   let bestT=null, bestScore=Infinity;
-  for (const rO of atO) {{
-    for (const rD of atD) {{
-      const app = APPROACH[rO.name]&&APPROACH[rO.name][rD.name];
-      if(!app||app.gapKm>XFER_MAX_KM) continue;
-      const score = rO.km + app.gapKm + rD.km;
-      if(score<bestScore){{bestScore=score; bestT={{rO,rD,app}};}}
-    }}
+  for(const rO of atO) for(const rD of atD) {{
+    const app=APPROACH[rO.name]&&APPROACH[rO.name][rD.name];
+    if(!app||app.gapKm>XFER_MAX_KM) continue;
+    const score=rO.km+app.gapKm+rD.km;
+    if(score<bestScore){{bestScore=score; bestT={{rO,rD,app}};}}
   }}
-
   if(bestT) {{
     const {{rO,rD,app}}=bestT;
-    const sameRoad = app.gapKm<=XFER_SAME;
-    const xferWalk_m = Math.round(app.gapKm*1000);
-
+    const sameRoad=app.gapKm<=XFER_SAME;
     drawRoutes(new Set([rO.name,rD.name]));
-
-    // Drop-off circle on line A (pulsing yellow)
-    _dropMarker = pulseMarker(app.ptA.lat, app.ptA.lon, '#fbbf24',
-      'بڵێ: دابەزین هەیە — شوێنی گۆڕین');
-
-    // Board circle on line B (pulsing blue)
-    _boardMarker = pulseMarker(app.ptB.lat, app.ptB.lon, '#60a5fa',
-      'سەر پاسی '+rD.name.replace(/_/g,' ')+' کەوە');
-
-    // Dashed walking line between them (only if gap > ~10m)
-    if(!sameRoad && app.gapKm>0.01) {{
-      _walkLine = L.polyline(
-        [[app.ptA.lat,app.ptA.lon],[app.ptB.lat,app.ptB.lon]],
-        {{color:'#fbbf24', weight:2, dashArray:'6 5', opacity:0.8}}
-      ).addTo(map);
-    }}
-
-    showTransfer({{
-      lineO:   rO.name, labelO: rO.name.replace(/_/g,' '), colorO: COLORS[rO.name]||'#888',
-      lineD:   rD.name, labelD: rD.name.replace(/_/g,' '), colorD: COLORS[rD.name]||'#888',
-      walkO_m: Math.round(rO.km*1000),
-      walkD_m: Math.round(rD.km*1000),
-      xferWalk_m, sameRoad,
-      boardPtO: rO.boardPt,
-      dropPt:  app.ptA, boardPt: app.ptB,
-      viaBazaar: false,
-    }});
+    _dropMarker=pulseMarker(app.ptA.lat,app.ptA.lon,'#fbbf24','بڵێ: دابەزین هەیە — شوێنی گۆڕین');
+    _boardMarker=pulseMarker(app.ptB.lat,app.ptB.lon,'#60a5fa','سەر پاسی '+rD.name.replace(/_/g,' ')+' کەوە');
+    if(!sameRoad && app.gapKm>0.01)
+      _walkLine=L.polyline([[app.ptA.lat,app.ptA.lon],[app.ptB.lat,app.ptB.lon]],
+        {{color:'#fbbf24',weight:2,dashArray:'6 5',opacity:0.8}}).addTo(map);
+    showTransfer({{lineO:rO.name, labelO:rO.name.replace(/_/g,' '),
+      lineD:rD.name, labelD:rD.name.replace(/_/g,' '),
+      walkO_m:Math.round(rO.km*1000), walkD_m:Math.round(rD.km*1000),
+      xferWalk_m:Math.round(app.gapKm*1000), sameRoad,
+      dropPt:app.ptA, boardPt:app.ptB, viaBazaar:false}});
     return;
   }}
 
-  // ── CASE 3: Via Bazaar hub ────────────────────────────────────────────────
-  // Every route is named X_Bazar — all lines terminate at / pass through the
-  // Bazaar city-centre terminal. When lines don't cross, the passenger rides
-  // Line A to the Bazaar, walks within the terminal area, boards Line B.
-  //
-  // We compute the Bazaar point for each line as the endpoint of the polyline
-  // that is closest to the centroid of ALL route endpoints (the terminal cluster).
-
-  // Step 1: collect all endpoint candidates (first + last point of each route)
-  const allEnds = [];
-  for (const name of ROUTE_NAMES) {{
-    const pts = ROUTE_PTS[name];
-    if(pts.length) {{
-      allEnds.push({{name, pt:pts[0],       end:'first'}});
-      allEnds.push({{name, pt:pts[pts.length-1], end:'last'}});
-    }}
+  // CASE 3: Via Bazaar hub
+  const allEnds=[];
+  for(const name of ROUTE_NAMES) {{
+    const pts=ROUTE_PTS[name]; if(!pts.length) continue;
+    allEnds.push({{pt:pts[0]}}); allEnds.push({{pt:pts[pts.length-1]}});
   }}
-  // Step 2: centroid of all endpoints → this is roughly the Bazaar
-  const centLat = allEnds.reduce((s,e)=>s+e.pt.lat,0)/allEnds.length;
-  const centLon = allEnds.reduce((s,e)=>s+e.pt.lon,0)/allEnds.length;
-
-  // Step 3: for each route, its "Bazaar point" = whichever endpoint is closer
-  //         to the centroid
+  const centLat=allEnds.reduce((s,e)=>s+e.pt.lat,0)/allEnds.length;
+  const centLon=allEnds.reduce((s,e)=>s+e.pt.lon,0)/allEnds.length;
   function bazaarPt(name) {{
-    const pts = ROUTE_PTS[name];
-    if(!pts.length) return null;
-    const first=pts[0], last=pts[pts.length-1];
-    return hav(first.lat,first.lon,centLat,centLon)
-         < hav(last.lat, last.lon, centLat,centLon)
-         ? first : last;
+    const pts=ROUTE_PTS[name]; if(!pts.length) return null;
+    const f=pts[0],l=pts[pts.length-1];
+    return hav(f.lat,f.lon,centLat,centLon)<hav(l.lat,l.lon,centLat,centLon)?f:l;
   }}
-
-  // Step 4: find best (lineA, lineB) pair via Bazaar
-  // score = walkO(lineA) + walkBazaar(dropBazaarA → boardBazaarB) + walkD(lineB)
   let bestB=null, bestBScore=Infinity;
-  for (const rO of atO) {{
-    const bzA = bazaarPt(rO.name);
-    if(!bzA) continue;
-    for (const rD of atD) {{
+  for(const rO of atO) {{
+    const bzA=bazaarPt(rO.name); if(!bzA) continue;
+    for(const rD of atD) {{
       if(rD.name===rO.name) continue;
-      const bzB = bazaarPt(rD.name);
-      if(!bzB) continue;
-      const bazaarWalk = hav(bzA.lat,bzA.lon,bzB.lat,bzB.lon);
-      const score = rO.km + bazaarWalk + rD.km;
-      if(score<bestBScore){{
-        bestBScore=score;
-        bestB={{rO,rD,bzA,bzB,bazaarWalk}};
-      }}
+      const bzB=bazaarPt(rD.name); if(!bzB) continue;
+      const bw=hav(bzA.lat,bzA.lon,bzB.lat,bzB.lon);
+      const score=rO.km+bw+rD.km;
+      if(score<bestBScore){{bestBScore=score; bestB={{rO,rD,bzA,bzB,bazaarWalk:bw}};}}
     }}
   }}
-
   if(bestB) {{
     const {{rO,rD,bzA,bzB,bazaarWalk}}=bestB;
-    const bazaarWalk_m = Math.round(bazaarWalk*1000);
-
     drawRoutes(new Set([rO.name,rD.name]));
-
-    // Green dot = board Line A
-    _dropMarker  = pulseMarker(rO.boardPt.lat, rO.boardPt.lon, '#22c55e',
-      'سەر پاسی '+rO.name.replace(/_/g,' ')+' کەوە');
-    // Yellow dot = drop off at Bazaar from Line A
-    _boardMarker = pulseMarker(bzA.lat, bzA.lon, '#fbbf24',
-      'پاسەکە لە بازاڕ دەوەستێت بە خۆی');
-    // Blue dot = board Line B at Bazaar
-    _walkLine    = pulseMarker(bzB.lat, bzB.lon, '#60a5fa',
-      'سەر پاسی '+rD.name.replace(/_/g,' ')+' کەوە');
-    // Dashed walk between the two Bazaar points
-    if(bazaarWalk>0.01) {{
-      _walkLine2 = L.polyline(
-        [[bzA.lat,bzA.lon],[bzB.lat,bzB.lon]],
-        {{color:'#fbbf24', weight:2, dashArray:'6 5', opacity:0.8}}
-      ).addTo(map);
-    }}
-
-    showTransfer({{
-      lineO:   rO.name, labelO: rO.name.replace(/_/g,' '), colorO: COLORS[rO.name]||'#888',
-      lineD:   rD.name, labelD: rD.name.replace(/_/g,' '), colorD: COLORS[rD.name]||'#888',
-      walkO_m: Math.round(rO.km*1000),
-      walkD_m: Math.round(rD.km*1000),
-      xferWalk_m: bazaarWalk_m,
-      sameRoad: bazaarWalk<=XFER_SAME,
-      boardPtO: rO.boardPt,
-      dropPt:  bzA, boardPt: bzB,
-      viaBazaar: true,
-    }});
+    _dropMarker=pulseMarker(rO.boardPt.lat,rO.boardPt.lon,'#22c55e','سەر پاسی '+rO.name.replace(/_/g,' ')+' کەوە');
+    _boardMarker=pulseMarker(bzA.lat,bzA.lon,'#fbbf24','پاسەکە لە بازاڕ دەوەستێت بە خۆی');
+    _walkLine=pulseMarker(bzB.lat,bzB.lon,'#60a5fa','سەر پاسی '+rD.name.replace(/_/g,' ')+' کەوە');
+    if(bazaarWalk>0.01)
+      _walkLine2=L.polyline([[bzA.lat,bzA.lon],[bzB.lat,bzB.lon]],
+        {{color:'#fbbf24',weight:2,dashArray:'6 5',opacity:0.8}}).addTo(map);
+    showTransfer({{lineO:rO.name, labelO:rO.name.replace(/_/g,' '),
+      lineD:rD.name, labelD:rD.name.replace(/_/g,' '),
+      walkO_m:Math.round(rO.km*1000), walkD_m:Math.round(rD.km*1000),
+      xferWalk_m:Math.round(bazaarWalk*1000), sameRoad:bazaarWalk<=XFER_SAME,
+      dropPt:bzA, boardPt:bzB, viaBazaar:true}});
     return;
   }}
 
-  // ── CASE 4: Truly unreachable ─────────────────────────────────────────────
   showErr('هیچ هێڵێک نەدۆزرایەوە.');
 }}
 
-// ── Pulsing circle marker ─────────────────────────────────────────────────────
+// ── Pulse marker ──────────────────────────────────────────────────────────────
 function pulseMarker(lat, lon, color, tip) {{
   const icon = L.divIcon({{
-    html: `<div style="
-      width:18px;height:18px;border-radius:50%;
-      background:${{color}};border:3px solid #fff;
-      box-shadow:0 0 0 0 ${{color}}88;
-      animation:ripple 1.4s infinite;"></div>`,
+    html:`<div style="width:18px;height:18px;border-radius:50%;background:${{color}};border:3px solid #fff;box-shadow:0 0 0 0 ${{color}}88;animation:ripple 1.4s infinite;"></div>`,
     iconSize:[18,18], iconAnchor:[9,9], className:''
   }});
   return L.marker([lat,lon],{{icon,zIndexOffset:900}})
-    .bindTooltip(tip,{{permanent:false,direction:'top'}})
-    .addTo(map);
+    .bindTooltip(tip,{{permanent:false,direction:'top'}}).addTo(map);
 }}
-
-// Inject ripple keyframe once
 if(!document.getElementById('ripple-style')) {{
-  const s=document.createElement('style');
-  s.id='ripple-style';
-  s.textContent=`@keyframes ripple{{
-    0%{{box-shadow:0 0 0 0 rgba(255,255,255,.6);}}
-    70%{{box-shadow:0 0 0 10px rgba(255,255,255,0);}}
-    100%{{box-shadow:0 0 0 0 rgba(255,255,255,0);}}
-  }}`;
+  const s=document.createElement('style'); s.id='ripple-style';
+  s.textContent='@keyframes ripple{{0%{{box-shadow:0 0 0 0 rgba(255,255,255,.6);}}70%{{box-shadow:0 0 0 10px rgba(255,255,255,0);}}100%{{box-shadow:0 0 0 0 rgba(255,255,255,0);}}}}';
   document.head.appendChild(s);
 }}
 
 // ── Result renderers ──────────────────────────────────────────────────────────
-function pill(label,color) {{
-  return `<span class="pill" style="background:${{color}}22;color:${{color}};border:1px solid ${{color}}55">${{label}}</span>`;
-}}
-
-function fmtCoord(pt) {{
-  return pt ? '('+pt.lat.toFixed(5)+', '+pt.lon.toFixed(5)+')' : '';
-}}
-
-// ── Compact result card builder ───────────────────────────────────────────────
-// Each "leg" is one visual row: icon strip + main label + tap-to-expand detail
-
 function legRow(chips, label, detail) {{
-  // chips = array of {{type:'walk'|'bus'|'xfer', label, color}}
   const chipHtml = chips.map(c => {{
     if(c.type==='walk') return `<span class="leg-chip walk">🚶 ${{c.label}}</span>`;
     if(c.type==='bus')  return `<span class="leg-chip bus" style="background:${{c.color}}22;border-color:${{c.color}}66;color:${{c.color}}">${{c.label}}</span>`;
     if(c.type==='xfer') return `<span class="leg-chip xfer">🔁</span>`;
     return '';
   }}).join('<span class="leg-arr">›</span>');
-
-  const detailHtml = detail
-    ? `<div class="leg-detail">${{detail}}</div>`
-    : '';
-
   return `<div class="leg" onclick="this.classList.toggle('open')">
     <div class="leg-top">
       <div class="leg-chips">${{chipHtml}}</div>
       <div class="leg-label">${{label}}</div>
       ${{detail ? '<span class="leg-caret">›</span>' : ''}}
     </div>
-    ${{detailHtml}}
+    ${{detail ? `<div class="leg-detail">${{detail}}</div>` : ''}}
   </div>`;
 }}
 
 function showDirect(r) {{
   const c = COLORS[r.lineO]||'#888';
   const altsHtml = r.alts.length
-    ? ' · ' + r.alts.map(a=>
-        `<span style="color:${{COLORS[a.name]||'#888'}}">${{a.name.replace(/_/g,' ')}}</span>`
-      ).join(' / ')
+    ? ' · '+r.alts.map(a=>`<span style="color:${{COLORS[a.name]||'#888'}}">${{a.name.replace(/_/g,' ')}}</span>`).join(' / ')
     : '';
-
   document.getElementById('result-inner').innerHTML =
-    `<div class="summary ok">✅ ڕاستەوخۆ — گۆڕین پێویست نیە</div>`+
-    `<div class="legs">`+
-
-    legRow(
-      [{{type:'walk', label: `<span id="wd-o">${{r.walkO_m}}</span>م`}}],
+    `<div class="summary ok">✅ ڕاستەوخۆ — گۆڕین پێویست نیە</div><div class="legs">` +
+    legRow([{{type:'walk',label:r.walkO_m+'م'}}],
       `بڕۆ بۆ شەقامی <strong style="color:${{c}}">${{r.labelO}}</strong>`+altsHtml,
-      `پێویستە <strong><span id="wd-o2">${{r.walkO_m}}</span> م</strong> بە پێ بڕۆی — 🟢 خاڵی سەوز لەسەر نەخشەکە`
-    )+
-
-    legRow(
-      [{{type:'bus', label: r.labelO, color: c}}],
+      `پێویستە <strong>${{r.walkO_m}} م</strong> بە پێ بڕۆی — 🟢 خاڵی سەوز لەسەر نەخشەکە`) +
+    legRow([{{type:'bus',label:r.labelO,color:c}}],
       `دەست ڕاگرە · سەر پاسەکە بکەوە · بڵێ <em>"دابەزین هەیە"</em>`,
-      `شوفێر دەوەستێت ئەگەر ڕێگا هەبێت — 🟢 خاڵی سەوز = شوێنی دابەزین`
-    )+
-
-    legRow(
-      [{{type:'walk', label: `<span id="wd-d">${{r.walkD_m}}</span>م`}}],
-      `پێویستە <strong><span id="wd-d2">${{r.walkD_m}}</span> م</strong> بە پێ بڕۆی — گەیشتیت! 🎉`,
-      null
-    )+
-
+      `شوفێر دەوەستێت ئەگەر ڕێگا هەبێت — 🟢 خاڵی سەوز = شوێنی دابەزین`) +
+    legRow([{{type:'walk',label:r.walkD_m+'م'}}],
+      `پێویستە <strong>${{r.walkD_m}} م</strong> بە پێ بڕۆی — گەیشتیت! 🎉`, null) +
     `</div>`;
   showCard();
-
-  // Enrich with real OSRM walking distances asynchronously
-  [
-    {{fromLat:ptO.lat,      fromLon:ptO.lon,      toLat:r.boardPt.lat, toLon:r.boardPt.lon, elIds:['wd-o','wd-o2']}},
-    {{fromLat:r.dropPt.lat, fromLon:r.dropPt.lon, toLat:ptD.lat,       toLon:ptD.lon,       elIds:['wd-d','wd-d2']}},
-  ].forEach(async l => {{
-    const m = await walkingDist(l.fromLat,l.fromLon,l.toLat,l.toLon);
-    if(m !== null) l.elIds.forEach(id => {{
-      const el = document.getElementById(id);
-      if(el) el.textContent = m;
-    }});
-  }});
 }}
 
 function showTransfer(r) {{
-  const cO = COLORS[r.lineO]||'#888', cD = COLORS[r.lineD]||'#888';
-
+  const cO=COLORS[r.lineO]||'#888', cD=COLORS[r.lineD]||'#888';
   const xferDetail = r.sameRoad
     ? `هەمان شەقام — پیاسەکردن پێویست نیە`
-    : `پێویستە <strong><span id="wd-x2">${{r.xferWalk_m}}</span> م</strong> بە پێ بڕۆی — 🟡 زەرد بۆ 🔵 شین لەسەر نەخشەکە`;
-
+    : `پێویستە <strong>${{r.xferWalk_m}} م</strong> بە پێ بڕۆی — 🟡 زەرد بۆ 🔵 شین لەسەر نەخشەکە`;
   const dropOffNote = r.viaBazaar
     ? `پاسەکە لە بازاڕ دەوەستێت بە خۆی — دابەزە`
     : `بڵێ: <em>"دابەزین هەیە"</em> لە شەقامی ${{r.labelD}} — 🟡 خاڵی زەرد`;
-
-  const header = r.viaBazaar
-    ? `🔁 یەک گۆڕین — لە ڕێگای بازاڕ`
-    : `🔁 یەک گۆڕین — لە کەنارەی شەقام`;
-
+  const header = r.viaBazaar ? `🔁 یەک گۆڕین — لە ڕێگای بازاڕ` : `🔁 یەک گۆڕین — لە کەنارەی شەقام`;
   document.getElementById('result-inner').innerHTML =
-    `<div class="summary xfr">${{header}}</div>`+
-    `<div class="legs">`+
-
-    legRow(
-      [{{type:'walk', label:`<span id="wd-o">${{r.walkO_m}}</span>م`}}],
+    `<div class="summary xfr">${{header}}</div><div class="legs">` +
+    legRow([{{type:'walk',label:r.walkO_m+'م'}}],
       `بڕۆ بۆ شەقامی <strong style="color:${{cO}}">${{r.labelO}}</strong>`,
-      `پێویستە <strong><span id="wd-o2">${{r.walkO_m}}</span> م</strong> بە پێ بڕۆی — 🟢 خاڵی سەوز لەسەر نەخشەکە`
-    )+
-
-    legRow(
-      [{{type:'bus', label:r.labelO, color:cO}}],
+      `پێویستە <strong>${{r.walkO_m}} م</strong> بە پێ بڕۆی — 🟢 خاڵی سەوز`) +
+    legRow([{{type:'bus',label:r.labelO,color:cO}}],
       `دەست ڕاگرە · سەر پاسەکە بکەوە · ${{dropOffNote}}`,
-      `سەر پاسەکە بکەوە بە تاوەکو خاڵی زەرد — کاتێک گەیشتیت بڵێ دابەزین هەیە`
-    )+
-
-    legRow(
-      [{{type:'xfer'}}, {{type:'walk', label:`<span id="wd-x">${{r.xferWalk_m}}</span>م`}}],
+      `سەر پاسەکە بکەوە بە تاوەکو خاڵی زەرد`) +
+    legRow([{{type:'xfer'}},{{type:'walk',label:r.xferWalk_m+'م'}}],
       xferDetail,
-      r.sameRoad ? `هەمان شەقام` : `🟡 دابەزە — 🔵 خاڵی شین = شوێنی سەرکەوتن لە ${{r.labelD}}`
-    )+
-
-    legRow(
-      [{{type:'bus', label:r.labelD, color:cD}}],
+      r.sameRoad ? `هەمان شەقام` : `🟡 دابەزە — 🔵 خاڵی شین = شوێنی سەرکەوتن لە ${{r.labelD}}`) +
+    legRow([{{type:'bus',label:r.labelD,color:cD}}],
       `دەست ڕاگرە · سەر پاسی <strong style="color:${{cD}}">${{r.labelD}}</strong> بکەوە · بڵێ <em>"دابەزین هەیە"</em>`,
-      `سەر پاسەکە بکەوە بە تاوەکو خاڵی شین — کاتێک گەیشتیت بڵێ دابەزین هەیە`
-    )+
-
-    legRow(
-      [{{type:'walk', label:`<span id="wd-d">${{r.walkD_m}}</span>م`}}],
-      `پێویستە <strong><span id="wd-d2">${{r.walkD_m}}</span> م</strong> بە پێ بڕۆی — گەیشتیت! 🎉`,
-      null
-    )+
-
+      `سەر پاسەکە بکەوە بە تاوەکو مەوداکەت`) +
+    legRow([{{type:'walk',label:r.walkD_m+'م'}}],
+      `پێویستە <strong>${{r.walkD_m}} م</strong> بە پێ بڕۆی — گەیشتیت! 🎉`, null) +
     `</div>`;
   showCard();
-
-  // Enrich with real OSRM walking distances asynchronously
-  const bPtO = r.boardPtO || r.dropPt;  // origin board point on Line A
-  const osrmLegs = [
-    {{fromLat:ptO.lat,      fromLon:ptO.lon,      toLat:bPtO.lat,       toLon:bPtO.lon,       elIds:['wd-o','wd-o2']}},
-    {{fromLat:r.dropPt.lat, fromLon:r.dropPt.lon, toLat:r.boardPt.lat,  toLon:r.boardPt.lon,  elIds:['wd-x','wd-x2']}},
-    {{fromLat:r.boardPt.lat,fromLon:r.boardPt.lon,toLat:ptD.lat,        toLon:ptD.lon,        elIds:['wd-d','wd-d2']}},
-  ];
-  osrmLegs.forEach(async l => {{
-    if(l.elIds[0].includes('x') && r.sameRoad) return;
-    const m = await walkingDist(l.fromLat,l.fromLon,l.toLat,l.toLon);
-    if(m !== null) l.elIds.forEach(id => {{
-      const el = document.getElementById(id);
-      if(el) el.textContent = m;
-    }});
-  }});
-}}
-
-function step(icon, main, sub) {{
-  // kept for compatibility — not used in new card but may be called elsewhere
-  return `<div class="step"><span class="si">${{icon}}</span>`+
-    `<div class="sb"><div class="sm">${{main}}</div><div class="ss">${{sub}}</div></div></div>`;
 }}
 
 function showErr(msg) {{
   document.getElementById('result-inner').innerHTML=`<div class="summary err">⚠️ ${{msg}}</div>`;
   showCard();
 }}
+
+// ── Result card show/hide/mode ────────────────────────────────────────────────
+let _resultMode = 'float';
 function showCard() {{
-  const rc = document.getElementById('result-card');
-  rc.classList.remove('bottom','minimized');
-  rc.classList.add('float');
+  const rc  = document.getElementById('result-card');
+  const btn = document.getElementById('result-toggle');
+  rc.classList.remove('bottom'); rc.classList.add('float');
   _resultMode = 'float';
-  document.getElementById('result-toggle').textContent = '▤ خوارەوە';
+  btn.textContent = '▤ خوارەوە';
   rc.classList.add('show');
-  document.getElementById('result-toggle').style.display = 'flex';
+  btn.style.display = 'flex';
 }}
 function hideResult() {{
   clearXferLayers();
@@ -1129,24 +668,17 @@ function hideResult() {{
   document.getElementById('result-toggle').style.display = 'none';
   drawRoutes(null);
 }}
-
-// ── Mode toggle: float ↔ bottom strip ────────────────────────────────────────
-let _resultMode = 'float';
-
 function cycleResultMode() {{
   const rc  = document.getElementById('result-card');
   const btn = document.getElementById('result-toggle');
   rc.classList.remove(_resultMode);
-  _resultMode = (_resultMode === 'float') ? 'bottom' : 'float';
+  _resultMode = (_resultMode==='float') ? 'bottom' : 'float';
   rc.classList.add(_resultMode);
   rc.classList.add('show');
-  btn.textContent = _resultMode === 'float' ? '▤ خوارەوە' : '⊟ سەرەوە';
+  btn.textContent = _resultMode==='float' ? '▤ خوارەوە' : '⊟ سەرەوە';
 }}
 
-// Run on load if session already has both points
-if(ptO&&ptD) compute();
-
-// ── Mode (pick by clicking map) ───────────────────────────────────────────────
+// ── Map click picking ─────────────────────────────────────────────────────────
 let mode = '';
 function toggleMode(m) {{
   mode = (mode===m) ? '' : m;
@@ -1158,14 +690,13 @@ function toggleMode(m) {{
 map.on('click', e => {{
   if(!mode) return;
   const lat=e.latlng.lat, lon=e.latlng.lng;
-  const fmt = lat.toFixed(6)+', '+lon.toFixed(6);
+  const fmt=lat.toFixed(6)+', '+lon.toFixed(6);
   if(mode==='origin') {{
     ptO={{lat,lon}}; placeO(lat,lon);
     document.getElementById('inp-o').value=fmt;
     mode='dest';
     document.getElementById('btn-o').classList.remove('on');
     document.getElementById('btn-d').classList.add('on');
-    map.getContainer().classList.add('picking');
   }} else {{
     ptD={{lat,lon}}; placeD(lat,lon);
     document.getElementById('inp-d').value=fmt;
@@ -1178,129 +709,85 @@ map.on('click', e => {{
 
 // ── Manual coordinate input ───────────────────────────────────────────────────
 function parseCoord(raw) {{
-  // Accept: "35.566340, 45.394819" or "35.566340 45.394819" or "35.566340,45.394819"
-  const s = raw.trim().replace(/\s*,\s*/g, ',');
-  const parts = s.includes(',') ? s.split(',') : s.split(/\s+/);
+  const s=raw.trim().replace(/\s*,\s*/g,',');
+  const parts=s.includes(',')?s.split(','):s.split(/\s+/);
   if(parts.length<2) return null;
   const la=parseFloat(parts[0]), lo=parseFloat(parts[1]);
   return (isNaN(la)||isNaN(lo)) ? null : {{lat:la,lon:lo}};
 }}
-
 function onCoordInput(which, val) {{
-  // Try to parse on every keystroke — fire when we have a valid coord
-  const c = parseCoord(val);
-  if(!c) return;
+  const c=parseCoord(val); if(!c) return;
   if(which==='origin') {{
     ptO=c; placeO(c.lat,c.lon);
     map.setView([c.lat,c.lon], map.getZoom()<14?14:map.getZoom());
-    postPt('set_origin',c.lat,c.lon);
   }} else {{
     ptD=c; placeD(c.lat,c.lon);
     map.setView([c.lat,c.lon], map.getZoom()<14?14:map.getZoom());
-    postPt('set_destination',c.lat,c.lon);
   }}
   compute();
 }}
 
+// ── Clear / reset ─────────────────────────────────────────────────────────────
+let _gpsCircle = null;
 function clearPt(which) {{
   if(which==='origin') {{
-    ptO=null; if(mO){{map.removeLayer(mO);mO=null;}}
-    if(_gpsMarker){{map.removeLayer(_gpsMarker);_gpsMarker=null;}}
-    document.getElementById('btn-gps').classList.remove('located','locating');
+    ptO=null;
+    if(mO){{map.removeLayer(mO); mO=null;}}
+    if(_gpsCircle){{map.removeLayer(_gpsCircle); _gpsCircle=null;}}
+    document.getElementById('btn-gps').className='gps-btn';
     document.getElementById('btn-gps').textContent='📡';
     document.getElementById('inp-o').value='';
   }} else {{
-    ptD=null; if(mD){{map.removeLayer(mD);mD=null;}}
+    ptD=null;
+    if(mD){{map.removeLayer(mD); mD=null;}}
     document.getElementById('inp-d').value='';
   }}
-  postPt('clear_'+which);
   hideResult();
 }}
-
 function resetAll() {{
-  ptO=null; ptD=null;
-  if(mO){{map.removeLayer(mO);mO=null;}} if(mD){{map.removeLayer(mD);mD=null;}}
-  document.getElementById('inp-o').value='';
-  document.getElementById('inp-d').value='';
+  clearPt('origin'); clearPt('dest');
   mode='';
   document.getElementById('btn-o').classList.remove('on');
   document.getElementById('btn-d').classList.remove('on');
-  document.getElementById('btn-gps').classList.remove('located','locating');
-  document.getElementById('btn-gps').textContent='📡';
   map.getContainer().classList.remove('picking');
-  postPt('reset');
-  hideResult();
 }}
 
-// ── GPS: use device location as origin ───────────────────────────────────────
-let _gpsMarker = null;
-
+// ── GPS ───────────────────────────────────────────────────────────────────────
 function useMyLocation() {{
   const btn = document.getElementById('btn-gps');
-
   if(!navigator.geolocation) {{
     alert('بەدبەختانە، ئەم براوزەرە شوێننیشاندەر پشتگیری ناکات');
     return;
   }}
-
-  btn.classList.remove('located');
-  btn.classList.add('locating');
-  btn.textContent = '⏳';
-
+  btn.className='gps-btn locating'; btn.textContent='⏳';
   navigator.geolocation.getCurrentPosition(
     pos => {{
-      const lat = pos.coords.latitude;
-      const lon = pos.coords.longitude;
-
-      // Set as origin
-      ptO = {{lat, lon}};
-      placeO(lat, lon);
-      document.getElementById('inp-o').value = lat.toFixed(6) + ', ' + lon.toFixed(6);
-      map.setView([lat, lon], Math.max(map.getZoom(), 15));
-      postPt('set_origin', lat, lon);
-
-      // Add accuracy circle
-      if(_gpsMarker) map.removeLayer(_gpsMarker);
-      const acc = pos.coords.accuracy;
-      _gpsMarker = L.circle([lat, lon], {{
-        radius: acc,
-        color: '#60a5fa', fillColor: '#60a5fa',
-        fillOpacity: 0.08, weight: 1.5, dashArray: '4 4'
+      const lat=pos.coords.latitude, lon=pos.coords.longitude;
+      ptO={{lat,lon}}; placeO(lat,lon);
+      document.getElementById('inp-o').value=lat.toFixed(6)+', '+lon.toFixed(6);
+      map.setView([lat,lon], Math.max(map.getZoom(),15));
+      if(_gpsCircle) map.removeLayer(_gpsCircle);
+      _gpsCircle=L.circle([lat,lon],{{
+        radius:pos.coords.accuracy, color:'#60a5fa', fillColor:'#60a5fa',
+        fillOpacity:0.08, weight:1.5, dashArray:'4 4'
       }}).addTo(map);
-
-      btn.classList.remove('locating');
-      btn.classList.add('located');
-      btn.textContent = '✓';
-
+      btn.className='gps-btn located'; btn.textContent='✓';
       compute();
     }},
     err => {{
-      btn.classList.remove('locating');
-      btn.textContent = '📡';
-      const msgs = {{
-        1: 'مووچەی دەستگەیشتن بە شوێن پێنەدرا — تکایە ڕێگادان بدە',
-        2: 'شوێنەکەت نەدۆزرایەوە — دووبارە هەوڵبدە',
-        3: 'کاتژمێر تەواو بوو — دووبارە هەوڵبدە',
-      }};
-      alert(msgs[err.code] || 'هەڵەیەک ڕووی دا');
+      btn.className='gps-btn'; btn.textContent='📡';
+      const msgs={{1:'مووچەی دەستگەیشتن بە شوێن پێنەدرا — تکایە ڕێگادان بدە',
+                   2:'شوێنەکەت نەدۆزرایەوە — دووبارە هەوڵبدە',
+                   3:'کاتژمێر تەواو بوو — دووبارە هەوڵبدە'}};
+      alert(msgs[err.code]||'هەڵەیەک ڕووی دا');
     }},
-    {{ enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }}
+    {{enableHighAccuracy:true, timeout:10000, maximumAge:30000}}
   );
 }}
 
-// Pre-fill inputs if coming from session state
-if(INIT_O) document.getElementById('inp-o').value=INIT_O.lat.toFixed(6)+', '+INIT_O.lon.toFixed(6);
-if(INIT_D) document.getElementById('inp-d').value=INIT_D.lat.toFixed(6)+', '+INIT_D.lon.toFixed(6);
-
-// ── postMessage — only used for iframe resize, NOT for routing ────────────────
-function postPt(type,lat,lon) {{
-  // No-op: routing is 100% client-side JS, no Streamlit rerun needed
-}}
-
-// ── Resize iframe to window height ────────────────────────────────────────────
+// ── Resize ────────────────────────────────────────────────────────────────────
 function resize() {{
-  const h = window.innerHeight||900;
-  window.parent.postMessage({{type:'resize_map',height:h}},'*');
+  window.parent.postMessage({{type:'resize_map', height:window.innerHeight||900}},'*');
 }}
 resize();
 window.addEventListener('resize', resize);
@@ -1309,57 +796,32 @@ window.addEventListener('resize', resize);
 </html>"""
 
 
-# ── Session + relay ───────────────────────────────────────────────────────────
-
-def init_state():
-    st.session_state.setdefault("_ready", True)
-
-
 def main():
-    init_state()
-
     try:
         routes_geojson = load_routes(ROUTES_FILE)
     except Exception as e:
         st.error(f"Failed to load route file: {e}"); return
 
-    route_points_df = extract_route_points(routes_geojson)
-    if route_points_df.empty:
-        st.error("No route points found in bus_lines.geojson."); return
-
     live_buses = fetch_live_buses()
-    supa_url = st.secrets.get("SUPABASE_URL", "")     if hasattr(st, "secrets") else ""
+    supa_url = st.secrets.get("SUPABASE_URL", "")      if hasattr(st, "secrets") else ""
     supa_key = st.secrets.get("SUPABASE_ANON_KEY", "") if hasattr(st, "secrets") else ""
 
-    html = build_map_html(
-        routes_geojson,
-        [],          # no server-side highlight — JS handles it
-        None, None,  # origin/destination managed entirely in JS
-        None,
-        live_buses,
-        supa_url,
-        supa_key,
-    )
-    components.html(html, height=900, scrolling=False)
+    components.html(build_map_html(routes_geojson, live_buses, supa_url, supa_key),
+                    height=900, scrolling=False)
 
-    # Resize relay only — no routing relay needed
-    relay_js = """
-    <script>
+    # Resize relay only — no routing state sent to Streamlit
+    components.html("""<script>
     window.addEventListener('message', function(e) {
-        if (!e.data || e.data.type !== 'resize_map') return;
-        const iframes = window.parent.document.querySelectorAll('iframe');
-        iframes.forEach(function(f) {
-            if (f.getAttribute('height') && parseInt(f.getAttribute('height')) > 100) {
-                const h = e.data.height;
-                f.style.height = h + 'px';
-                f.style.minHeight = h + 'px';
-                f.setAttribute('height', h);
+        if(!e.data || e.data.type !== 'resize_map') return;
+        document.querySelectorAll('iframe').forEach(function(f) {
+            if(parseInt(f.getAttribute('height')||0) > 100) {
+                f.style.height = e.data.height + 'px';
+                f.style.minHeight = e.data.height + 'px';
+                f.setAttribute('height', e.data.height);
             }
         });
     });
-    </script>
-    """
-    components.html(relay_js, height=0)
+    </script>""", height=0)
 
 
 if __name__ == "__main__":
