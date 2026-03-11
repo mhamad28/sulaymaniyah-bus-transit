@@ -687,9 +687,23 @@ for (const a of ROUTE_NAMES) {{
   }}
 }}
 
-// ── State ────────────────────────────────────────────────────────────────────
-let ptO = INIT_O ? {{lat:INIT_O.lat,lon:INIT_O.lon}} : null;
-let ptD = INIT_D ? {{lat:INIT_D.lat,lon:INIT_D.lon}} : null;
+// ── OSRM walking distance ─────────────────────────────────────────────────────
+// Calls the public OSRM API for a walking route between two points.
+// Returns distance in metres, or null on failure.
+const OSRM = 'https://router.project-osrm.org/route/v1/foot';
+
+async function walkingDist(fromLat, fromLon, toLat, toLon) {{
+  try {{
+    const url = `${{OSRM}}/${{fromLon}},${{fromLat}};${{toLon}},${{toLat}}?overview=false`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if(data.code==='Ok' && data.routes&&data.routes[0])
+      return Math.round(data.routes[0].distance);
+  }} catch(e) {{}}
+  return null;   // fallback to straight-line
+}}
+
+// Update distance labels in the result card after OSRM responds — inline per caller
 
 // Transfer map layers
 let _dropMarker=null, _boardMarker=null, _walkLine=null, _walkLine2=null;
@@ -791,6 +805,7 @@ function compute() {{
       walkO_m: Math.round(rO.km*1000),
       walkD_m: Math.round(rD.km*1000),
       xferWalk_m, sameRoad,
+      boardPtO: rO.boardPt,
       dropPt:  app.ptA, boardPt: app.ptB,
       viaBazaar: false,
     }});
@@ -878,6 +893,7 @@ function compute() {{
       walkD_m: Math.round(rD.km*1000),
       xferWalk_m: bazaarWalk_m,
       sameRoad: bazaarWalk<=XFER_SAME,
+      boardPtO: rO.boardPt,
       dropPt:  bzA, boardPt: bzB,
       viaBazaar: true,
     }});
@@ -963,9 +979,9 @@ function showDirect(r) {{
     `<div class="legs">`+
 
     legRow(
-      [{{type:'walk', label: r.walkO_m+'م'}}],
-      `بەپێ بڕۆ بۆ پاسی <strong style="color:${{c}}">${{r.labelO}}</strong>`+altsHtml,
-      `پێویستە <strong>${{r.walkO_m}} م</strong> بە پێ بڕۆی — 🟢 خاڵی سەوز لەسەر نەخشەکە`
+      [{{type:'walk', label: `<span id="wd-o">${{r.walkO_m}}</span>م`}}],
+      `بڕۆ بۆ شەقامی <strong style="color:${{c}}">${{r.labelO}}</strong>`+altsHtml,
+      `پێویستە <strong><span id="wd-o2">${{r.walkO_m}}</span> م</strong> بە پێ بڕۆی — 🟢 خاڵی سەوز لەسەر نەخشەکە`
     )+
 
     legRow(
@@ -975,24 +991,36 @@ function showDirect(r) {{
     )+
 
     legRow(
-      [{{type:'walk', label: r.walkD_m+'م'}}],
-      `پێویستە <strong>${{r.walkD_m}} م</strong> بە پێ بڕۆی — گەیشتیت! 🎉`,
+      [{{type:'walk', label: `<span id="wd-d">${{r.walkD_m}}</span>م`}}],
+      `پێویستە <strong><span id="wd-d2">${{r.walkD_m}}</span> م</strong> بە پێ بڕۆی — گەیشتیت! 🎉`,
       null
     )+
 
     `</div>`;
   showCard();
+
+  // Enrich with real OSRM walking distances asynchronously
+  [
+    {{fromLat:ptO.lat,      fromLon:ptO.lon,      toLat:r.boardPt.lat, toLon:r.boardPt.lon, elIds:['wd-o','wd-o2']}},
+    {{fromLat:r.dropPt.lat, fromLon:r.dropPt.lon, toLat:ptD.lat,       toLon:ptD.lon,       elIds:['wd-d','wd-d2']}},
+  ].forEach(async l => {{
+    const m = await walkingDist(l.fromLat,l.fromLon,l.toLat,l.toLon);
+    if(m !== null) l.elIds.forEach(id => {{
+      const el = document.getElementById(id);
+      if(el) el.textContent = m;
+    }});
+  }});
 }}
 
 function showTransfer(r) {{
   const cO = COLORS[r.lineO]||'#888', cD = COLORS[r.lineD]||'#888';
 
   const xferDetail = r.sameRoad
-    ? `هەمان شەقام — بەپێ ڕۆشتن پێویست نیە`
-    : `پێویستە <strong>${{r.xferWalk_m}} م</strong> بە پێ بڕۆی — 🟡 زەرد بۆ 🔵 شین لەسەر نەخشەکە`;
+    ? `هەمان شەقام — پیاسەکردن پێویست نیە`
+    : `پێویستە <strong><span id="wd-x2">${{r.xferWalk_m}}</span> م</strong> بە پێ بڕۆی — 🟡 زەرد بۆ 🔵 شین لەسەر نەخشەکە`;
 
   const dropOffNote = r.viaBazaar
-    ? `پاسەکە خۆی لە بازاڕ  دەوەستێت — دابەزە`
+    ? `پاسەکە لە بازاڕ دەوەستێت بە خۆی — دابەزە`
     : `بڵێ: <em>"دابەزین هەیە"</em> لە شەقامی ${{r.labelD}} — 🟡 خاڵی زەرد`;
 
   const header = r.viaBazaar
@@ -1004,37 +1032,53 @@ function showTransfer(r) {{
     `<div class="legs">`+
 
     legRow(
-      [{{type:'walk', label: r.walkO_m+'م'}}],
-      `بڕۆ بۆ پاسی <strong style="color:${{cO}}">${{r.labelO}}</strong>`,
-      `پێویستە <strong>${{r.walkO_m}} م</strong> بە پێ بڕۆی — 🟢 خاڵی سەوز لەسەر نەخشەکە`
+      [{{type:'walk', label:`<span id="wd-o">${{r.walkO_m}}</span>م`}}],
+      `بڕۆ بۆ شەقامی <strong style="color:${{cO}}">${{r.labelO}}</strong>`,
+      `پێویستە <strong><span id="wd-o2">${{r.walkO_m}}</span> م</strong> بە پێ بڕۆی — 🟢 خاڵی سەوز لەسەر نەخشەکە`
     )+
 
     legRow(
-      [{{type:'bus', label: r.labelO, color: cO}}],
+      [{{type:'bus', label:r.labelO, color:cO}}],
       `دەست ڕاگرە · سەر پاسەکە بکەوە · ${{dropOffNote}}`,
       `سەر پاسەکە بکەوە بە تاوەکو خاڵی زەرد — کاتێک گەیشتیت بڵێ دابەزین هەیە`
     )+
 
     legRow(
-      [{{type:'xfer'}}, {{type:'walk', label: r.xferWalk_m+'م'}}],
+      [{{type:'xfer'}}, {{type:'walk', label:`<span id="wd-x">${{r.xferWalk_m}}</span>م`}}],
       xferDetail,
       r.sameRoad ? `هەمان شەقام` : `🟡 دابەزە — 🔵 خاڵی شین = شوێنی سەرکەوتن لە ${{r.labelD}}`
     )+
 
     legRow(
-      [{{type:'bus', label: r.labelD, color: cD}}],
+      [{{type:'bus', label:r.labelD, color:cD}}],
       `دەست ڕاگرە · سەر پاسی <strong style="color:${{cD}}">${{r.labelD}}</strong> بکەوە · بڵێ <em>"دابەزین هەیە"</em>`,
       `سەر پاسەکە بکەوە بە تاوەکو خاڵی شین — کاتێک گەیشتیت بڵێ دابەزین هەیە`
     )+
 
     legRow(
-      [{{type:'walk', label: r.walkD_m+'م'}}],
-      `پێویستە <strong>${{r.walkD_m}} م</strong> بە پێ بڕۆی — گەیشتیت! 🎉`,
+      [{{type:'walk', label:`<span id="wd-d">${{r.walkD_m}}</span>م`}}],
+      `پێویستە <strong><span id="wd-d2">${{r.walkD_m}}</span> م</strong> بە پێ بڕۆی — گەیشتیت! 🎉`,
       null
     )+
 
     `</div>`;
   showCard();
+
+  // Enrich with real OSRM walking distances asynchronously
+  const bPtO = r.boardPtO || r.dropPt;  // origin board point on Line A
+  const osrmLegs = [
+    {{fromLat:ptO.lat,      fromLon:ptO.lon,      toLat:bPtO.lat,       toLon:bPtO.lon,       elIds:['wd-o','wd-o2']}},
+    {{fromLat:r.dropPt.lat, fromLon:r.dropPt.lon, toLat:r.boardPt.lat,  toLon:r.boardPt.lon,  elIds:['wd-x','wd-x2']}},
+    {{fromLat:r.boardPt.lat,fromLon:r.boardPt.lon,toLat:ptD.lat,        toLon:ptD.lon,        elIds:['wd-d','wd-d2']}},
+  ];
+  osrmLegs.forEach(async l => {{
+    if(l.elIds[0].includes('x') && r.sameRoad) return;
+    const m = await walkingDist(l.fromLat,l.fromLon,l.toLat,l.toLon);
+    if(m !== null) l.elIds.forEach(id => {{
+      const el = document.getElementById(id);
+      if(el) el.textContent = m;
+    }});
+  }});
 }}
 
 function step(icon, main, sub) {{
@@ -1049,13 +1093,10 @@ function showErr(msg) {{
 }}
 function showCard() {{
   const rc = document.getElementById('result-card');
-  // Always reset to float mode when a new result appears
   rc.classList.remove('bottom','minimized');
-  if(_resultMode !== 'float') {{
-    rc.classList.add('float');
-    _resultMode = 'float';
-    document.getElementById('result-toggle').textContent = _modeLabels['float'];
-  }}
+  rc.classList.add('float');
+  _resultMode = 'float';
+  document.getElementById('result-toggle').textContent = '▤ خوارەوە';
   rc.classList.add('show');
   document.getElementById('result-toggle').style.display = 'flex';
 }}
@@ -1067,27 +1108,17 @@ function hideResult() {{
   drawRoutes(null);
 }}
 
-// ── Mode cycling: float → bottom → minimized → float ─────────────────────────
+// ── Mode toggle: float ↔ bottom strip ────────────────────────────────────────
 let _resultMode = 'float';
-const _modeLabels = {{
-  float:     '⊟ کەمکردنەوە',
-  bottom:    '▤ خوارەوە',
-  minimized: '⊞ گەورەکردنەوە',
-}};
-const _modeNext = {{ float:'bottom', bottom:'minimized', minimized:'float' }};
 
 function cycleResultMode() {{
-  const rc = document.getElementById('result-card');
+  const rc  = document.getElementById('result-card');
   const btn = document.getElementById('result-toggle');
-  // Remove current mode class
   rc.classList.remove(_resultMode);
-  // Advance
-  _resultMode = _modeNext[_resultMode];
+  _resultMode = (_resultMode === 'float') ? 'bottom' : 'float';
   rc.classList.add(_resultMode);
-  // Keep 'show' class in float/bottom, not needed for minimized (always visible)
-  if(_resultMode === 'minimized') rc.classList.remove('show');
-  else rc.classList.add('show');
-  btn.textContent = _modeLabels[_resultMode];
+  rc.classList.add('show');
+  btn.textContent = _resultMode === 'float' ? '▤ خوارەوە' : '⊟ سەرەوە';
 }}
 
 // Run on load if session already has both points
