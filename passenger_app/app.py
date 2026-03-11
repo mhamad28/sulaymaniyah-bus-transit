@@ -285,6 +285,27 @@ html, body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
 }}
 .reset-btn:hover {{ background:rgba(148,163,184,.15); color:#e2eaf4; }}
 
+/* GPS location button */
+.gps-btn {{
+  flex-shrink:0; width:30px; height:30px; border-radius:8px;
+  border:1.5px solid rgba(96,165,250,.5); background:rgba(96,165,250,.08);
+  color:#60a5fa; font-size:14px; cursor:pointer; line-height:1;
+  display:flex; align-items:center; justify-content:center;
+  transition:all .2s;
+}}
+.gps-btn:hover {{ background:rgba(96,165,250,.2); border-color:#60a5fa; }}
+.gps-btn.locating {{
+  animation:gps-pulse 1s infinite;
+  background:rgba(96,165,250,.25); border-color:#60a5fa;
+}}
+.gps-btn.located {{
+  background:rgba(34,197,94,.15); border-color:#22c55e; color:#4ade80;
+}}
+@keyframes gps-pulse {{
+  0%,100% {{ box-shadow:0 0 0 0 rgba(96,165,250,.5); }}
+  50%      {{ box-shadow:0 0 0 6px rgba(96,165,250,0); }}
+}}
+
 /* crosshair when picking */
 .picking {{ cursor:crosshair !important; }}
 
@@ -321,21 +342,19 @@ html, body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
   transform: translateY(0);
   pointer-events: all;
 }}
-#result-card.bottom .steps {{
+#result-card.bottom .legs {{
   flex-direction: row; flex-wrap: nowrap;
   overflow-x: auto; gap: 8px;
   padding-bottom: 4px;
 }}
-#result-card.bottom .steps::-webkit-scrollbar {{ height: 3px; }}
-#result-card.bottom .steps::-webkit-scrollbar-thumb {{
+#result-card.bottom .legs::-webkit-scrollbar {{ height: 3px; }}
+#result-card.bottom .legs::-webkit-scrollbar-thumb {{
   background: rgba(255,255,255,.15); border-radius: 2px; }}
-#result-card.bottom .step {{
-  min-width: 160px; max-width: 180px; flex-shrink: 0;
-  flex-direction: column; align-items: flex-start; gap: 4px;
+#result-card.bottom .leg {{
+  min-width: 150px; max-width: 170px; flex-shrink: 0;
 }}
-#result-card.bottom .si {{ font-size: 18px; }}
-#result-card.bottom .sm {{ font-size: 12px; }}
-#result-card.bottom .ss {{ font-size: 10px; }}
+#result-card.bottom .leg-chip {{ font-size: 10px; padding: 2px 7px; }}
+#result-card.bottom .leg-label {{ font-size: 11px; }}
 #result-card.bottom .summary {{ margin-bottom: 8px; }}
 
 /* ── MINIMIZED mode — just the summary bar ── */
@@ -473,6 +492,7 @@ html, body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
   <div class="row">
     <span class="dot" style="background:#22c55e"></span>
     <button class="pick-btn green" id="btn-o" onclick="toggleMode('origin')">📍 هەڵبژێرە</button>
+    <button class="gps-btn" id="btn-gps" onclick="useMyLocation()" title="بنکەکەت بەئۆتۆماتیکی دیاری بکە">📡</button>
     <input class="coord-box" id="inp-o" placeholder="بنکە — کۆدینەیت لە گووگڵ مەپ لێرە بنووسە"
            oninput="onCoordInput('origin', this.value)"/>
     <button class="x-btn" onclick="clearPt('origin')">✕</button>
@@ -689,9 +709,23 @@ for (const a of ROUTE_NAMES) {{
   }}
 }}
 
-// ── State ────────────────────────────────────────────────────────────────────
-let ptO = INIT_O ? {{lat:INIT_O.lat,lon:INIT_O.lon}} : null;
-let ptD = INIT_D ? {{lat:INIT_D.lat,lon:INIT_D.lon}} : null;
+// ── OSRM walking distance ─────────────────────────────────────────────────────
+// Calls the public OSRM API for a walking route between two points.
+// Returns distance in metres, or null on failure.
+const OSRM = 'https://router.project-osrm.org/route/v1/foot';
+
+async function walkingDist(fromLat, fromLon, toLat, toLon) {{
+  try {{
+    const url = `${{OSRM}}/${{fromLon}},${{fromLat}};${{toLon}},${{toLat}}?overview=false`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if(data.code==='Ok' && data.routes&&data.routes[0])
+      return Math.round(data.routes[0].distance);
+  }} catch(e) {{}}
+  return null;   // fallback to straight-line
+}}
+
+// Update distance labels in the result card after OSRM responds — inline per caller
 
 // Transfer map layers
 let _dropMarker=null, _boardMarker=null, _walkLine=null, _walkLine2=null;
@@ -793,6 +827,7 @@ function compute() {{
       walkO_m: Math.round(rO.km*1000),
       walkD_m: Math.round(rD.km*1000),
       xferWalk_m, sameRoad,
+      boardPtO: rO.boardPt,
       dropPt:  app.ptA, boardPt: app.ptB,
       viaBazaar: false,
     }});
@@ -880,6 +915,7 @@ function compute() {{
       walkD_m: Math.round(rD.km*1000),
       xferWalk_m: bazaarWalk_m,
       sameRoad: bazaarWalk<=XFER_SAME,
+      boardPtO: rO.boardPt,
       dropPt:  bzA, boardPt: bzB,
       viaBazaar: true,
     }});
@@ -965,9 +1001,9 @@ function showDirect(r) {{
     `<div class="legs">`+
 
     legRow(
-      [{{type:'walk', label: r.walkO_m+'م'}}],
+      [{{type:'walk', label: `<span id="wd-o">${{r.walkO_m}}</span>م`}}],
       `بڕۆ بۆ شەقامی <strong style="color:${{c}}">${{r.labelO}}</strong>`+altsHtml,
-      `پێویستە <strong>${{r.walkO_m}} م</strong> بە پێ بڕۆی — 🟢 خاڵی سەوز لەسەر نەخشەکە`
+      `پێویستە <strong><span id="wd-o2">${{r.walkO_m}}</span> م</strong> بە پێ بڕۆی — 🟢 خاڵی سەوز لەسەر نەخشەکە`
     )+
 
     legRow(
@@ -977,13 +1013,25 @@ function showDirect(r) {{
     )+
 
     legRow(
-      [{{type:'walk', label: r.walkD_m+'م'}}],
-      `پێویستە <strong>${{r.walkD_m}} م</strong> بە پێ بڕۆی — گەیشتیت! 🎉`,
+      [{{type:'walk', label: `<span id="wd-d">${{r.walkD_m}}</span>م`}}],
+      `پێویستە <strong><span id="wd-d2">${{r.walkD_m}}</span> م</strong> بە پێ بڕۆی — گەیشتیت! 🎉`,
       null
     )+
 
     `</div>`;
   showCard();
+
+  // Enrich with real OSRM walking distances asynchronously
+  [
+    {{fromLat:ptO.lat,      fromLon:ptO.lon,      toLat:r.boardPt.lat, toLon:r.boardPt.lon, elIds:['wd-o','wd-o2']}},
+    {{fromLat:r.dropPt.lat, fromLon:r.dropPt.lon, toLat:ptD.lat,       toLon:ptD.lon,       elIds:['wd-d','wd-d2']}},
+  ].forEach(async l => {{
+    const m = await walkingDist(l.fromLat,l.fromLon,l.toLat,l.toLon);
+    if(m !== null) l.elIds.forEach(id => {{
+      const el = document.getElementById(id);
+      if(el) el.textContent = m;
+    }});
+  }});
 }}
 
 function showTransfer(r) {{
@@ -991,7 +1039,7 @@ function showTransfer(r) {{
 
   const xferDetail = r.sameRoad
     ? `هەمان شەقام — پیاسەکردن پێویست نیە`
-    : `پێویستە <strong>${{r.xferWalk_m}} م</strong> بە پێ بڕۆی — 🟡 زەرد بۆ 🔵 شین لەسەر نەخشەکە`;
+    : `پێویستە <strong><span id="wd-x2">${{r.xferWalk_m}}</span> م</strong> بە پێ بڕۆی — 🟡 زەرد بۆ 🔵 شین لەسەر نەخشەکە`;
 
   const dropOffNote = r.viaBazaar
     ? `پاسەکە لە بازاڕ دەوەستێت بە خۆی — دابەزە`
@@ -1006,37 +1054,53 @@ function showTransfer(r) {{
     `<div class="legs">`+
 
     legRow(
-      [{{type:'walk', label: r.walkO_m+'م'}}],
+      [{{type:'walk', label:`<span id="wd-o">${{r.walkO_m}}</span>م`}}],
       `بڕۆ بۆ شەقامی <strong style="color:${{cO}}">${{r.labelO}}</strong>`,
-      `پێویستە <strong>${{r.walkO_m}} م</strong> بە پێ بڕۆی — 🟢 خاڵی سەوز لەسەر نەخشەکە`
+      `پێویستە <strong><span id="wd-o2">${{r.walkO_m}}</span> م</strong> بە پێ بڕۆی — 🟢 خاڵی سەوز لەسەر نەخشەکە`
     )+
 
     legRow(
-      [{{type:'bus', label: r.labelO, color: cO}}],
+      [{{type:'bus', label:r.labelO, color:cO}}],
       `دەست ڕاگرە · سەر پاسەکە بکەوە · ${{dropOffNote}}`,
       `سەر پاسەکە بکەوە بە تاوەکو خاڵی زەرد — کاتێک گەیشتیت بڵێ دابەزین هەیە`
     )+
 
     legRow(
-      [{{type:'xfer'}}, {{type:'walk', label: r.xferWalk_m+'م'}}],
+      [{{type:'xfer'}}, {{type:'walk', label:`<span id="wd-x">${{r.xferWalk_m}}</span>م`}}],
       xferDetail,
       r.sameRoad ? `هەمان شەقام` : `🟡 دابەزە — 🔵 خاڵی شین = شوێنی سەرکەوتن لە ${{r.labelD}}`
     )+
 
     legRow(
-      [{{type:'bus', label: r.labelD, color: cD}}],
+      [{{type:'bus', label:r.labelD, color:cD}}],
       `دەست ڕاگرە · سەر پاسی <strong style="color:${{cD}}">${{r.labelD}}</strong> بکەوە · بڵێ <em>"دابەزین هەیە"</em>`,
       `سەر پاسەکە بکەوە بە تاوەکو خاڵی شین — کاتێک گەیشتیت بڵێ دابەزین هەیە`
     )+
 
     legRow(
-      [{{type:'walk', label: r.walkD_m+'م'}}],
-      `پێویستە <strong>${{r.walkD_m}} م</strong> بە پێ بڕۆی — گەیشتیت! 🎉`,
+      [{{type:'walk', label:`<span id="wd-d">${{r.walkD_m}}</span>م`}}],
+      `پێویستە <strong><span id="wd-d2">${{r.walkD_m}}</span> م</strong> بە پێ بڕۆی — گەیشتیت! 🎉`,
       null
     )+
 
     `</div>`;
   showCard();
+
+  // Enrich with real OSRM walking distances asynchronously
+  const bPtO = r.boardPtO || r.dropPt;  // origin board point on Line A
+  const osrmLegs = [
+    {{fromLat:ptO.lat,      fromLon:ptO.lon,      toLat:bPtO.lat,       toLon:bPtO.lon,       elIds:['wd-o','wd-o2']}},
+    {{fromLat:r.dropPt.lat, fromLon:r.dropPt.lon, toLat:r.boardPt.lat,  toLon:r.boardPt.lon,  elIds:['wd-x','wd-x2']}},
+    {{fromLat:r.boardPt.lat,fromLon:r.boardPt.lon,toLat:ptD.lat,        toLon:ptD.lon,        elIds:['wd-d','wd-d2']}},
+  ];
+  osrmLegs.forEach(async l => {{
+    if(l.elIds[0].includes('x') && r.sameRoad) return;
+    const m = await walkingDist(l.fromLat,l.fromLon,l.toLat,l.toLon);
+    if(m !== null) l.elIds.forEach(id => {{
+      const el = document.getElementById(id);
+      if(el) el.textContent = m;
+    }});
+  }});
 }}
 
 function step(icon, main, sub) {{
@@ -1051,13 +1115,10 @@ function showErr(msg) {{
 }}
 function showCard() {{
   const rc = document.getElementById('result-card');
-  // Always reset to float mode when a new result appears
   rc.classList.remove('bottom','minimized');
-  if(_resultMode !== 'float') {{
-    rc.classList.add('float');
-    _resultMode = 'float';
-    document.getElementById('result-toggle').textContent = _modeLabels['float'];
-  }}
+  rc.classList.add('float');
+  _resultMode = 'float';
+  document.getElementById('result-toggle').textContent = '▤ خوارەوە';
   rc.classList.add('show');
   document.getElementById('result-toggle').style.display = 'flex';
 }}
@@ -1069,27 +1130,17 @@ function hideResult() {{
   drawRoutes(null);
 }}
 
-// ── Mode cycling: float → bottom → minimized → float ─────────────────────────
+// ── Mode toggle: float ↔ bottom strip ────────────────────────────────────────
 let _resultMode = 'float';
-const _modeLabels = {{
-  float:     '⊟ کەمکردنەوە',
-  bottom:    '▤ خوارەوە',
-  minimized: '⊞ گەورەکردنەوە',
-}};
-const _modeNext = {{ float:'bottom', bottom:'minimized', minimized:'float' }};
 
 function cycleResultMode() {{
-  const rc = document.getElementById('result-card');
+  const rc  = document.getElementById('result-card');
   const btn = document.getElementById('result-toggle');
-  // Remove current mode class
   rc.classList.remove(_resultMode);
-  // Advance
-  _resultMode = _modeNext[_resultMode];
+  _resultMode = (_resultMode === 'float') ? 'bottom' : 'float';
   rc.classList.add(_resultMode);
-  // Keep 'show' class in float/bottom, not needed for minimized (always visible)
-  if(_resultMode === 'minimized') rc.classList.remove('show');
-  else rc.classList.add('show');
-  btn.textContent = _modeLabels[_resultMode];
+  rc.classList.add('show');
+  btn.textContent = _resultMode === 'float' ? '▤ خوارەوە' : '⊟ سەرەوە';
 }}
 
 // Run on load if session already has both points
@@ -1155,6 +1206,9 @@ function onCoordInput(which, val) {{
 function clearPt(which) {{
   if(which==='origin') {{
     ptO=null; if(mO){{map.removeLayer(mO);mO=null;}}
+    if(_gpsMarker){{map.removeLayer(_gpsMarker);_gpsMarker=null;}}
+    document.getElementById('btn-gps').classList.remove('located','locating');
+    document.getElementById('btn-gps').textContent='📡';
     document.getElementById('inp-o').value='';
   }} else {{
     ptD=null; if(mD){{map.removeLayer(mD);mD=null;}}
@@ -1172,9 +1226,66 @@ function resetAll() {{
   mode='';
   document.getElementById('btn-o').classList.remove('on');
   document.getElementById('btn-d').classList.remove('on');
+  document.getElementById('btn-gps').classList.remove('located','locating');
   map.getContainer().classList.remove('picking');
   postPt('reset');
   hideResult();
+}}
+
+// ── GPS: use device location as origin ───────────────────────────────────────
+let _gpsMarker = null;
+
+function useMyLocation() {{
+  const btn = document.getElementById('btn-gps');
+
+  if(!navigator.geolocation) {{
+    alert('بەدبەختانە، ئەم براوزەرە شوێننیشاندەر پشتگیری ناکات');
+    return;
+  }}
+
+  btn.classList.remove('located');
+  btn.classList.add('locating');
+  btn.textContent = '⏳';
+
+  navigator.geolocation.getCurrentPosition(
+    pos => {{
+      const lat = pos.coords.latitude;
+      const lon = pos.coords.longitude;
+
+      // Set as origin
+      ptO = {{lat, lon}};
+      placeO(lat, lon);
+      document.getElementById('inp-o').value = lat.toFixed(6) + ', ' + lon.toFixed(6);
+      map.setView([lat, lon], Math.max(map.getZoom(), 15));
+      postPt('set_origin', lat, lon);
+
+      // Add accuracy circle
+      if(_gpsMarker) map.removeLayer(_gpsMarker);
+      const acc = pos.coords.accuracy;
+      _gpsMarker = L.circle([lat, lon], {{
+        radius: acc,
+        color: '#60a5fa', fillColor: '#60a5fa',
+        fillOpacity: 0.08, weight: 1.5, dashArray: '4 4'
+      }}).addTo(map);
+
+      btn.classList.remove('locating');
+      btn.classList.add('located');
+      btn.textContent = '✓';
+
+      compute();
+    }},
+    err => {{
+      btn.classList.remove('locating');
+      btn.textContent = '📡';
+      const msgs = {{
+        1: 'مووچەی دەستگەیشتن بە شوێن پێنەدرا — تکایە ڕێگادان بدە',
+        2: 'شوێنەکەت نەدۆزرایەوە — دووبارە هەوڵبدە',
+        3: 'کاتژمێر تەواو بوو — دووبارە هەوڵبدە',
+      }};
+      alert(msgs[err.code] || 'هەڵەیەک ڕووی دا');
+    }},
+    {{ enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }}
+  );
 }}
 
 // Pre-fill inputs if coming from session state
