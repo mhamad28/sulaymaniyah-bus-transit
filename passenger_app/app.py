@@ -551,29 +551,20 @@ function nearbyRoutes(lat, lon, maxKm) {{
   return out.sort((a,b)=>a.km-b.km);
 }}
 
-// ── Transfer geometry ────────────────────────────────────────────────────────
-// Find the closest approach between two route polylines.
-// Returns {{gapKm, ptA, ptB}} — ptA = drop-off on line A, ptB = board on line B.
-// Uses every-Nth-point sampling for performance on page load.
+// ── Transfer geometry ─────────────────────────────────────────────────────────
+// True closest approach — scans ALL point pairs between two routes.
+// 13 routes × ~200 pts each → ~78 pairs × 40k comparisons = ~3M ops, < 50ms.
 function closestApproach(nameA, nameB) {{
-  const ptsA=ROUTE_PTS[nameA]||[], ptsB=ROUTE_PTS[nameB]||[];
-  let best=Infinity, ptA=null, ptB=null;
-  const stepA = Math.max(1, Math.floor(ptsA.length/80));
-  const stepB = Math.max(1, Math.floor(ptsB.length/80));
-  for (let i=0;i<ptsA.length;i+=stepA) {{
-    for (let j=0;j<ptsB.length;j+=stepB) {{
-      const d=hav(ptsA[i].lat,ptsA[i].lon,ptsB[j].lat,ptsB[j].lon);
-      if(d<best){{best=d;ptA=ptsA[i];ptB=ptsB[j];}}
-    }}
-  }}
-  // Refine: rescan ±5 neighbours of the best points at full resolution
-  if(ptA&&ptB) {{
-    const iA=ptsA.indexOf(ptA), iB=ptsB.indexOf(ptB);
-    for (let i=Math.max(0,iA-5);i<=Math.min(ptsA.length-1,iA+5);i++) {{
-      for (let j=Math.max(0,iB-5);j<=Math.min(ptsB.length-1,iB+5);j++) {{
-        const d=hav(ptsA[i].lat,ptsA[i].lon,ptsB[j].lat,ptsB[j].lon);
-        if(d<best){{best=d;ptA=ptsA[i];ptB=ptsB[j];}}
-      }}
+  const ptsA = ROUTE_PTS[nameA]||[];
+  const ptsB = ROUTE_PTS[nameB]||[];
+  if(!ptsA.length||!ptsB.length) return {{gapKm:Infinity,ptA:null,ptB:null}};
+
+  let best=Infinity, ptA=ptsA[0], ptB=ptsB[0];
+  for (let i=0; i<ptsA.length; i++) {{
+    const la=ptsA[i].lat, lo=ptsA[i].lon;
+    for (let j=0; j<ptsB.length; j++) {{
+      const d = hav(la,lo,ptsB[j].lat,ptsB[j].lon);
+      if(d<best){{ best=d; ptA=ptsA[i]; ptB=ptsB[j]; }}
     }}
   }}
   return {{gapKm:best, ptA, ptB}};
@@ -593,10 +584,10 @@ let ptO = INIT_O ? {{lat:INIT_O.lat,lon:INIT_O.lon}} : null;
 let ptD = INIT_D ? {{lat:INIT_D.lat,lon:INIT_D.lon}} : null;
 
 // Transfer map layers
-let _dropMarker=null, _boardMarker=null, _walkLine=null;
+let _dropMarker=null, _boardMarker=null, _walkLine=null, _walkLine2=null;
 function clearXferLayers() {{
-  [_dropMarker,_boardMarker,_walkLine].forEach(l=>{{if(l)map.removeLayer(l);}});
-  _dropMarker=_boardMarker=_walkLine=null;
+  [_dropMarker,_boardMarker,_walkLine,_walkLine2].forEach(l=>{{if(l)map.removeLayer(l);}});
+  _dropMarker=_boardMarker=_walkLine=_walkLine2=null;
 }}
 
 // ── Main compute ─────────────────────────────────────────────────────────────
@@ -649,10 +640,10 @@ function compute() {{
     return;
   }}
 
-  // ── CASE 2: 1 transfer ────────────────────────────────────────────────────
+  // ── CASE 2: 1 transfer — lines physically cross ───────────────────────────
   // Find the pair (lineA from atO, lineB from atD) with:
   //   1. A valid crossing (gapKm ≤ XFER_MAX_KM)
-  //   2. Minimum score = walkO + gapKm*2 + walkD
+  //   2. Minimum score = walkO + gapKm + walkD
   let bestT=null, bestScore=Infinity;
   for (const rO of atO) {{
     for (const rD of atD) {{
@@ -693,12 +684,100 @@ function compute() {{
       walkD_m: Math.round(rD.km*1000),
       xferWalk_m, sameRoad,
       dropPt:  app.ptA, boardPt: app.ptB,
+      viaBazaar: false,
     }});
     return;
   }}
 
-  // ── CASE 3: No valid transfer found ──────────────────────────────────────
-  showErr('No route found — the bus lines near your origin and destination do not share a road within walking distance.');
+  // ── CASE 3: Via Bazaar hub ────────────────────────────────────────────────
+  // Every route is named X_Bazar — all lines terminate at / pass through the
+  // Bazaar city-centre terminal. When lines don't cross, the passenger rides
+  // Line A to the Bazaar, walks within the terminal area, boards Line B.
+  //
+  // We compute the Bazaar point for each line as the endpoint of the polyline
+  // that is closest to the centroid of ALL route endpoints (the terminal cluster).
+
+  // Step 1: collect all endpoint candidates (first + last point of each route)
+  const allEnds = [];
+  for (const name of ROUTE_NAMES) {{
+    const pts = ROUTE_PTS[name];
+    if(pts.length) {{
+      allEnds.push({{name, pt:pts[0],       end:'first'}});
+      allEnds.push({{name, pt:pts[pts.length-1], end:'last'}});
+    }}
+  }}
+  // Step 2: centroid of all endpoints → this is roughly the Bazaar
+  const centLat = allEnds.reduce((s,e)=>s+e.pt.lat,0)/allEnds.length;
+  const centLon = allEnds.reduce((s,e)=>s+e.pt.lon,0)/allEnds.length;
+
+  // Step 3: for each route, its "Bazaar point" = whichever endpoint is closer
+  //         to the centroid
+  function bazaarPt(name) {{
+    const pts = ROUTE_PTS[name];
+    if(!pts.length) return null;
+    const first=pts[0], last=pts[pts.length-1];
+    return hav(first.lat,first.lon,centLat,centLon)
+         < hav(last.lat, last.lon, centLat,centLon)
+         ? first : last;
+  }}
+
+  // Step 4: find best (lineA, lineB) pair via Bazaar
+  // score = walkO(lineA) + walkBazaar(dropBazaarA → boardBazaarB) + walkD(lineB)
+  let bestB=null, bestBScore=Infinity;
+  for (const rO of atO) {{
+    const bzA = bazaarPt(rO.name);
+    if(!bzA) continue;
+    for (const rD of atD) {{
+      if(rD.name===rO.name) continue;
+      const bzB = bazaarPt(rD.name);
+      if(!bzB) continue;
+      const bazaarWalk = hav(bzA.lat,bzA.lon,bzB.lat,bzB.lon);
+      const score = rO.km + bazaarWalk + rD.km;
+      if(score<bestBScore){{
+        bestBScore=score;
+        bestB={{rO,rD,bzA,bzB,bazaarWalk}};
+      }}
+    }}
+  }}
+
+  if(bestB) {{
+    const {{rO,rD,bzA,bzB,bazaarWalk}}=bestB;
+    const bazaarWalk_m = Math.round(bazaarWalk*1000);
+
+    drawRoutes(new Set([rO.name,rD.name]));
+
+    // Green dot = board Line A
+    _dropMarker  = pulseMarker(rO.boardPt.lat, rO.boardPt.lon, '#22c55e',
+      'Board '+rO.name.replace(/_/g,' ')+' here');
+    // Yellow dot = drop off at Bazaar from Line A
+    _boardMarker = pulseMarker(bzA.lat, bzA.lon, '#fbbf24',
+      'Tell driver: "Bazar" — get off here');
+    // Blue dot = board Line B at Bazaar
+    _walkLine    = pulseMarker(bzB.lat, bzB.lon, '#60a5fa',
+      'Board '+rD.name.replace(/_/g,' ')+' here');
+    // Dashed walk between the two Bazaar points
+    if(bazaarWalk>0.01) {{
+      _walkLine2 = L.polyline(
+        [[bzA.lat,bzA.lon],[bzB.lat,bzB.lon]],
+        {{color:'#fbbf24', weight:2, dashArray:'6 5', opacity:0.8}}
+      ).addTo(map);
+    }}
+
+    showTransfer({{
+      lineO:   rO.name, labelO: rO.name.replace(/_/g,' '), colorO: COLORS[rO.name]||'#888',
+      lineD:   rD.name, labelD: rD.name.replace(/_/g,' '), colorD: COLORS[rD.name]||'#888',
+      walkO_m: Math.round(rO.km*1000),
+      walkD_m: Math.round(rD.km*1000),
+      xferWalk_m: bazaarWalk_m,
+      sameRoad: bazaarWalk<=XFER_SAME,
+      dropPt:  bzA, boardPt: bzB,
+      viaBazaar: true,
+    }});
+    return;
+  }}
+
+  // ── CASE 4: Truly unreachable ─────────────────────────────────────────────
+  showErr('No route found between these two points.');
 }}
 
 // ── Pulsing circle marker ─────────────────────────────────────────────────────
@@ -766,26 +845,38 @@ function showDirect(r) {{
 function showTransfer(r) {{
   const xferLine = r.sameRoad
     ? `Same road — no walking needed between buses`
-    : `Walk <strong>${{r.xferWalk_m}} m</strong> to the <strong>${{r.labelD}}</strong> road`;
+    : `Walk <strong>${{r.xferWalk_m}} m</strong> to the <strong>${{r.viaBazaar?'next bus':''+r.labelD}}</strong> road`;
+
+  const transferInstruction = r.viaBazaar
+    ? `Tell the driver: <em>"Bazar"</em> — get off at the Bazaar terminal`
+    : `Tell the driver: <em>"Stop at the ${{r.labelD}} road"</em>`;
+
+  const dropSub = r.viaBazaar
+    ? `🟡 Yellow dot = drop off at Bazaar terminal`
+    : `🟡 Yellow dot = your drop-off / transfer point`;
+
+  const boardSub = r.viaBazaar
+    ? `🔵 Blue dot = where to board ${{r.labelD}} from the Bazaar`
+    : `🔵 Blue dot = where to board ${{r.labelD}}`;
+
+  const header = r.viaBazaar
+    ? `🔁 1 transfer — via Bazaar`
+    : `🔁 1 transfer — direct road crossing`;
 
   document.getElementById('result-inner').innerHTML =
-    `<div class="summary xfr">🔁 1 transfer required</div>`+
+    `<div class="summary xfr">${{header}}</div>`+
     `<div class="steps">`+
       step('🚶',
         `Walk <strong>${{r.walkO_m}} m</strong> to the road`,
-        `Head to the <strong>${{r.labelO}}</strong> bus road`)+
+        `Head to the <strong>${{r.labelO}}</strong> bus road — 🟢 green dot on map`)+
       step('🚌',
         `Raise your hand — board <strong>${{r.labelO}}</strong>`,
-        `The driver will stop when traffic allows`)+
-      step('🗣️',
-        `Tell the driver: <em>"Stop at the ${{r.labelD}} road"</em>`,
-        `🟡 Yellow dot on map = your drop-off point ${{fmtCoord(r.dropPt)}}`)+
-      step('🚶',
-        xferLine,
-        `🔵 Blue dot on map = where to board ${{r.labelD}}`)+
+        `Driver stops when traffic allows`)+
+      step('🗣️', transferInstruction, dropSub)+
+      step('🚶', xferLine, boardSub)+
       step('🚌',
         `Raise your hand — board <strong>${{r.labelD}}</strong>`,
-        `The driver will stop when traffic allows`)+
+        `Driver stops when traffic allows`)+
       step('🗣️',
         `Tell the driver your destination area`,
         `Ask to stop near your destination`)+
