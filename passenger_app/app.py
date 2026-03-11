@@ -964,7 +964,7 @@ function showDirect(r) {{
 
     legRow(
       [{{type:'walk', label: r.walkO_m+'م'}}],
-      `بڕۆ بۆ شەقامی <strong style="color:${{c}}">${{r.labelO}}</strong>`+altsHtml,
+      `بڕۆ بۆ پاسی <strong style="color:${{c}}">${{r.labelO}}</strong>`+altsHtml,
       `پێویستە <strong>${{r.walkO_m}} م</strong> بە پێ بڕۆی — 🟢 خاڵی سەوز لەسەر نەخشەکە`
     )+
 
@@ -988,11 +988,11 @@ function showTransfer(r) {{
   const cO = COLORS[r.lineO]||'#888', cD = COLORS[r.lineD]||'#888';
 
   const xferDetail = r.sameRoad
-    ? `هەمان شەقام — پیاسەکردن پێویست نیە`
+    ? `هەمان شەقام — بەپێ ڕۆشتن پێویست نیە`
     : `پێویستە <strong>${{r.xferWalk_m}} م</strong> بە پێ بڕۆی — 🟡 زەرد بۆ 🔵 شین لەسەر نەخشەکە`;
 
   const dropOffNote = r.viaBazaar
-    ? `پاسەکە لە بازاڕ دەوەستێت بە خۆی — دابەزە`
+    ? `پاسەکە خۆی لە بازاڕ  دەوەستێت — دابەزە`
     : `بڵێ: <em>"دابەزین هەیە"</em> لە شەقامی ${{r.labelD}} — 🟡 خاڵی زەرد`;
 
   const header = r.viaBazaar
@@ -1005,7 +1005,7 @@ function showTransfer(r) {{
 
     legRow(
       [{{type:'walk', label: r.walkO_m+'م'}}],
-      `بڕۆ بۆ شەقامی <strong style="color:${{cO}}">${{r.labelO}}</strong>`,
+      `بڕۆ بۆ پاسی <strong style="color:${{cO}}">${{r.labelO}}</strong>`,
       `پێویستە <strong>${{r.walkO_m}} م</strong> بە پێ بڕۆی — 🟢 خاڵی سەوز لەسەر نەخشەکە`
     )+
 
