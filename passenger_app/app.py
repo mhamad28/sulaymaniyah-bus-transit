@@ -1,10 +1,3 @@
-# =========================================================
-# PYTHON PART
-# This file is the main Streamlit app file.
-# It loads bus routes, gets live buses, builds the map page,
-# and shows everything inside Streamlit.
-# =========================================================
-
 import json
 import sys
 from pathlib import Path
@@ -13,37 +6,15 @@ from typing import Dict, List
 import streamlit as st
 import streamlit.components.v1 as components
 
-# =========================================================
-# PYTHON PART
-# Add shared folder to Python path so this file can import
-# helper code from another folder.
-# =========================================================
 sys.path.append(str(Path(__file__).resolve().parents[1] / "shared"))
-
-# =========================================================
-# PYTHON PART
-# Try to import Supabase connection helper.
-# If not found, app will still run, but without live buses.
-# =========================================================
 try:
     from supabase_client import get_supabase
     _SUPABASE_AVAILABLE = True
 except ImportError:
     _SUPABASE_AVAILABLE = False
 
-# =========================================================
-# PYTHON PART
-# Streamlit page settings:
-# page title, wide layout, sidebar hidden by default.
-# =========================================================
 st.set_page_config(page_title="Suly Transit", layout="wide", initial_sidebar_state="collapsed")
 
-# =========================================================
-# PYTHON PART + CSS
-# This injects CSS into Streamlit itself.
-# It hides Streamlit header/sidebar/footer and removes spacing
-# so your app looks like a full-screen custom app.
-# =========================================================
 st.markdown("""
 <style>
   header[data-testid="stHeader"]   { display: none !important; }
@@ -55,24 +26,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# =========================================================
-# PYTHON PART
-# App constants/settings
-# ROUTES_FILE = location of bus route GeoJSON file
-# DEFAULT_CENTER = default map center
-# DEFAULT_ZOOM = map start zoom
-# MAX_WALK_KM = max walking distance allowed in routing
-# =========================================================
 ROUTES_FILE    = Path(__file__).resolve().parents[1] / "assets" / "bus_lines.geojson"
 DEFAULT_CENTER = [35.56, 45.43]
 DEFAULT_ZOOM   = 13
 MAX_WALK_KM    = 0.70
 
-# =========================================================
-# PYTHON PART
-# Color for each bus line.
-# Used in map lines, bus markers, and legend.
-# =========================================================
 ROUTE_COLORS: Dict[str, str] = {
     "Bakrajo_Bazar":      "#e41a1c",
     "Chwarchra_Bazar":    "#377eb8",
@@ -89,11 +47,6 @@ ROUTE_COLORS: Dict[str, str] = {
     "ZargatayTaza_Bazar": "#1b9e77",
 }
 
-# =========================================================
-# PYTHON FUNCTION
-# Load bus route GeoJSON file.
-# Cached so Streamlit does not reload it every time.
-# =========================================================
 @st.cache_data(hash_funcs={Path: lambda p: p.stat().st_mtime if p.exists() else 0})
 def load_routes(path: Path) -> dict:
     if not path.exists():
@@ -101,11 +54,6 @@ def load_routes(path: Path) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
-# =========================================================
-# PYTHON FUNCTION
-# Get live bus locations from Supabase.
-# If Supabase is missing or errors happen, return empty list.
-# =========================================================
 def fetch_live_buses() -> list:
     if not _SUPABASE_AVAILABLE:
         return []
@@ -118,23 +66,9 @@ def fetch_live_buses() -> list:
     except Exception:
         return []
 
-# =========================================================
-# PYTHON FUNCTION
-# Build one full HTML page as a string.
-# This page contains:
-# - HTML structure
-# - CSS styling
-# - JavaScript map and routing logic
-# Then Streamlit shows it inside an iframe.
-# =========================================================
 def build_map_html(routes_geojson: dict, live_buses: list,
                    supabase_url: str, supabase_key: str) -> str:
 
-    # -----------------------------------------------------
-    # PYTHON PART
-    # Convert Python data into JSON strings so JavaScript
-    # can use them inside the HTML page.
-    # -----------------------------------------------------
     geojson_str  = json.dumps(routes_geojson)
     colors_str   = json.dumps(ROUTE_COLORS)
     buses_str    = json.dumps(live_buses)
@@ -142,48 +76,29 @@ def build_map_html(routes_geojson: dict, live_buses: list,
         {"name": k.replace("_", " "), "color": v} for k, v in ROUTE_COLORS.items()
     ])
 
-    # =====================================================
-    # HTML PART
-    # The returned string below is a full webpage.
-    # Inside it:
-    #   <style> = CSS
-    #   <script> = JavaScript
-    # =====================================================
     return f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
-
-<!-- HTML PART
-Load fonts and Leaflet map library -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-
 <style>
-/* =======================================================
-   CSS PART
-   Global page reset and map full screen
-   ======================================================= */
 * {{ margin:0; padding:0; box-sizing:border-box; }}
 html,body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
   font-family:'Noto Naskh Arabic',system-ui,sans-serif; }}
 #map {{ width:100%; height:100vh; }}
 
-/* General glass-style card box */
 .card {{
   background:rgba(10,16,26,0.88); backdrop-filter:blur(16px);
   border:1px solid rgba(255,255,255,0.10); border-radius:14px;
   box-shadow:0 8px 32px rgba(0,0,0,0.5); color:#e2eaf4;
 }}
 
-/* =======================================================
-   CSS PART
-   Recenter / find-my-location button
-   ======================================================= */
+/* BUTTONS RIGHT SIDE */
 #recenter-btn {{
   position: absolute; bottom: 110px; right: 20px; z-index: 1001;
   width: 50px; height: 50px; border-radius: 12px; background: #000000; 
@@ -199,10 +114,20 @@ html,body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
 #recenter-btn:active {{ transform: scale(0.9); }}
 #recenter-btn.locating {{ border-color: #00E5FF; box-shadow: 0 0 15px #00E5FF; }}
 
-/* =======================================================
-   CSS PART
-   Top input panel for origin and destination
-   ======================================================= */
+#home-btn {{
+  position: absolute; bottom: 170px; right: 20px; z-index: 1001;
+  width: 50px; height: 50px; border-radius: 12px; background: #000000;
+  border: 1px solid rgba(255,255,255,0.2); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 4px 15px rgba(0,0,0,0.5); transition: all 0.2s;
+}}
+#home-btn::before {{
+  content: ""; width: 24px; height: 24px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23ffffff' stroke-width='2'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M3 10.5 12 3l9 7.5'/%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M5 9.5V21h14V9.5'/%3E%3C/svg%3E");
+  background-size: contain; background-repeat: no-repeat;
+}}
+#home-btn:active {{ transform: scale(0.9); }}
+
 #top-panel {{
   position:absolute; top:14px; left:50%; transform:translateX(-50%);
   z-index:1000; width:min(520px,92vw); padding:12px 14px;
@@ -244,17 +169,14 @@ html,body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
 .reset-btn:hover {{ background:rgba(148,163,184,.15); color:#e2eaf4; }}
 .picking {{ cursor:crosshair !important; }}
 
-/* =======================================================
-   CSS PART
-   Result card that shows route instructions
-   ======================================================= */
+/* RESULT CARD */
 #result-card {{
   position:absolute; z-index:1000; pointer-events:none;
   transition:all .4s cubic-bezier(.34,1.56,.64,1);
 }}
 #result-card.float {{
   bottom:20px; left:50%; transform:translateX(-50%) translateY(300px);
-  width:min(460px,92vw); padding:14px 16px; max-height:60vh; overflow-y:auto;
+  width:min(500px,92vw); padding:14px 16px; max-height:60vh; overflow-y:auto;
 }}
 #result-card.float.show {{ transform:translateX(-50%) translateY(0); pointer-events:all; }}
 #result-card.bottom {{
@@ -271,42 +193,37 @@ html,body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
 }}
 #result-toggle:hover {{ background:rgba(255,255,255,.16); color:#e2eaf4; }}
 .summary {{
-  text-align:center; font-size:13px; font-weight:700;
-  padding:7px 12px; border-radius:8px; margin-bottom:10px;
+  text-align:center; font-size:14px; font-weight:700;
+  padding:10px 12px; border-radius:10px; margin-bottom:10px;
 }}
-.summary.ok  {{ background:rgba(34,197,94,.15);  border:1px solid rgba(34,197,94,.3);  color:#4ade80; }}
-.summary.xfr {{ background:rgba(251,191,36,.13); border:1px solid rgba(251,191,36,.3); color:#fbbf24; }}
-.summary.err {{ background:rgba(239,68,68,.13);  border:1px solid rgba(239,68,68,.3);  color:#f87171; }}
+.summary.ok  {{ background:rgba(34,197,94,.12);  border:1px solid rgba(34,197,94,.28);  color:#86efac; }}
+.summary.xfr {{ background:rgba(168,85,247,.12); border:1px solid rgba(168,85,247,.28); color:#d8b4fe; }}
+.summary.err {{ background:rgba(239,68,68,.12);  border:1px solid rgba(239,68,68,.28);  color:#fca5a5; }}
 
-/* =======================================================
-   CSS PART
-   Step cards for walking/bus/transfer instructions
-   ======================================================= */
-.legs {{ display:flex; flex-direction:column; gap:5px; }}
+/* STEP CARDS */
+.legs {{ display:flex; flex-direction:column; gap:7px; }}
 .leg {{
-  border-radius:10px; overflow:hidden; background:rgba(255,255,255,.05);
+  border-radius:12px; overflow:hidden; background:rgba(255,255,255,.05);
   border:1px solid rgba(255,255,255,.08); cursor:pointer; transition:background .15s; user-select:none;
 }}
-.leg:hover {{ background:rgba(255,255,255,.09); }}
-.leg-top {{ display:flex; align-items:center; gap:8px; padding:10px 12px; }}
-.leg-chips {{ display:flex; align-items:center; gap:4px; flex-shrink:0; }}
-.leg-chip {{ font-size:11px; font-weight:700; padding:3px 9px; border-radius:20px; border:1.5px solid; white-space:nowrap; }}
-.leg-chip.walk {{ background:rgba(148,163,184,.1); border-color:rgba(148,163,184,.3); color:#94a3b8; }}
-.leg-chip.xfer {{ background:rgba(251,191,36,.1); border-color:rgba(251,191,36,.3); color:#fbbf24; padding:3px 7px; }}
-.leg-arr {{ color:#475569; font-size:12px; margin:0 1px; }}
-.leg-label {{ flex:1; font-size:12px; color:#e2eaf4; font-weight:500; line-height:1.4; direction:rtl; }}
+.leg:hover {{ background:rgba(255,255,255,.08); }}
+.leg-top {{ display:flex; align-items:center; gap:8px; padding:12px 12px; }}
+.leg-chips {{ display:flex; align-items:center; gap:5px; flex-shrink:0; }}
+.leg-chip {{ font-size:11px; font-weight:700; padding:4px 10px; border-radius:20px; border:1.5px solid; white-space:nowrap; }}
+.leg-chip.walk {{ background:rgba(148,163,184,.10); border-color:rgba(148,163,184,.28); color:#cbd5e1; }}
+.leg-chip.bus {{ }}
+.leg-chip.xfer {{ background:rgba(168,85,247,.10); border-color:rgba(168,85,247,.28); color:#d8b4fe; }}
+.leg-arr {{ color:#475569; font-size:12px; margin:0 2px; }}
+.leg-label {{ flex:1; font-size:13px; color:#e2eaf4; font-weight:600; line-height:1.5; direction:rtl; }}
 .leg-caret {{ color:#475569; font-size:14px; transition:transform .2s; flex-shrink:0; }}
 .leg.open .leg-caret {{ transform:rotate(90deg); }}
 .leg-detail {{
-  display:none; padding:8px 12px 10px; font-size:11px; color:#64748b; line-height:1.5;
+  display:none; padding:8px 12px 12px; font-size:12px; color:#a5b4fc; line-height:1.7;
   border-top:1px solid rgba(255,255,255,.05); direction:rtl;
 }}
 .leg.open .leg-detail {{ display:block; }}
 
-/* =======================================================
-   CSS PART
-   Legend panel for bus line colors
-   ======================================================= */
+/* LEGEND */
 #leg-btn {{
   position:absolute; top:14px; right:14px; z-index:1001; width:38px; height:38px;
   border-radius:10px; background:rgba(10,16,26,.88); backdrop-filter:blur(14px);
@@ -322,10 +239,7 @@ html,body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
 .li {{ display:flex; align-items:center; gap:7px; font-size:12px; color:#e2eaf4; }}
 .ld {{ width:9px; height:9px; border-radius:50%; flex-shrink:0; }}
 
-/* =======================================================
-   CSS PART
-   Live bus badge
-   ======================================================= */
+/* LIVE BADGE */
 #live-badge {{
   position:absolute; bottom:20px; right:14px; z-index:1000;
   padding:5px 13px; border-radius:20px; font-size:11px; font-weight:600;
@@ -336,7 +250,6 @@ html,body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
 .ld-dot {{ width:7px; height:7px; border-radius:50%; background:#22c55e; animation:blink 1.4s infinite; }}
 @keyframes blink {{ 0%,100%{{opacity:1;}} 50%{{opacity:.2;}} }}
 
-/* Zoom buttons style */
 .leaflet-control-zoom {{ border:none !important; }}
 .leaflet-control-zoom a {{
   background:rgba(10,16,26,.88) !important; color:#e2eaf4 !important;
@@ -345,27 +258,15 @@ html,body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
 </style>
 </head>
 <body>
-
-<!-- =====================================================
-     HTML PART
-     Main map container
-     ===================================================== -->
 <div id="map"></div>
 
-<!-- Find my location button -->
+<button id="home-btn" onclick="goDefaultView()" title="Default view"></button>
 <button id="recenter-btn" onclick="useMyLocation()" title="Find my location"></button>
 
-<!-- =====================================================
-     HTML PART
-     Top panel:
-     - origin input
-     - destination input
-     - reset button
-     ===================================================== -->
 <div id="top-panel" class="card" dir="rtl" lang="ckb">
   <div class="row">
     <span class="dot" style="background:#22c55e"></span>
-    <button class="pick-btn green" id="btn-o" onclick="toggleMode('origin')">📍 هەڵبژێرە</button>
+    <button class="pick-btn green" id="btn-o" onclick="toggleMode('origin')">هەڵبژێرە</button>
     <input class="coord-box" id="inp-o" placeholder="بنکە — کۆدینەیت لە گووگڵ مەپ لێرە بنووسە"
            oninput="onCoordInput('origin', this.value)"/>
     <button class="x-btn" onclick="clearPt('origin')">✕</button>
@@ -373,35 +274,28 @@ html,body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
   <div class="hr"></div>
   <div class="row">
     <span class="dot" style="background:#ef4444"></span>
-    <button class="pick-btn red" id="btn-d" onclick="toggleMode('dest')">🏁 هەڵبژێرە</button>
+    <button class="pick-btn red" id="btn-d" onclick="toggleMode('dest')">هەڵبژێرە</button>
     <input class="coord-box" id="inp-d" placeholder="مەودا — کۆدینەیت لە گووگڵ مەپ لێرە بنووسە"
            oninput="onCoordInput('dest', this.value)"/>
     <button class="x-btn" onclick="clearPt('dest')">✕</button>
   </div>
   <div class="hr"></div>
-  <div class="row"><button class="reset-btn" onclick="resetAll()">↺ ڕەستکردنەوە</button></div>
+  <div class="row"><button class="reset-btn" onclick="resetAll()">ڕێکخستنەوە</button></div>
 </div>
 
-<!-- Legend button and legend panel -->
 <button id="leg-btn" onclick="toggleLeg()">🗺</button>
 <div id="leg-panel" class="card">
   <div style="font-size:9px;font-weight:700;letter-spacing:.05em;color:#475569;margin-bottom:4px;">هێڵەکانی بەس</div>
 </div>
 
-<!-- Result card for route instructions -->
 <div id="result-card" class="card float" dir="rtl" lang="ckb">
-  <button id="result-toggle" onclick="cycleResultMode()" style="display:none">▤ خوارەوە</button>
+  <button id="result-toggle" onclick="cycleResultMode()" style="display:none">خوارەوە</button>
   <div id="result-inner"></div>
 </div>
 
-<!-- Live bus count badge -->
 <div id="live-badge" dir="rtl" lang="ckb"><span class="ld-dot"></span><span id="bus-ct">٠ بەس</span></div>
 
 <script>
-// =======================================================
-// JAVASCRIPT PART
-// Data coming from Python into JavaScript
-// =======================================================
 const COLORS   = {colors_str};
 const GEOJSON  = {geojson_str};
 const LEGEND   = {legend_items};
@@ -410,10 +304,7 @@ const SUPA_URL = "{supabase_url}";
 const SUPA_KEY = "{supabase_key}";
 const MAX_WALK = {MAX_WALK_KM};
 
-// =======================================================
-// JAVASCRIPT PART
-// Create the Leaflet map and base tiles
-// =======================================================
+// Map
 const map = L.map('map', {{
   center: [{DEFAULT_CENTER[0]}, {DEFAULT_CENTER[1]}],
   zoom: {DEFAULT_ZOOM}, minZoom: 10, maxZoom: 19
@@ -421,11 +312,7 @@ const map = L.map('map', {{
 L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',
   {{attribution:'© OpenStreetMap', maxZoom:19}}).addTo(map);
 
-// =======================================================
-// JAVASCRIPT PART
-// Draw bus route lines on the map
-// If some routes are "active", they are highlighted
-// =======================================================
+// Routes
 let routeLayer = null;
 function drawRoutes(active) {{
   if(routeLayer) map.removeLayer(routeLayer);
@@ -443,10 +330,7 @@ function drawRoutes(active) {{
 }}
 drawRoutes(null);
 
-// =======================================================
-// JAVASCRIPT PART
-// Build the legend from route colors
-// =======================================================
+// Legend
 const legPanel = document.getElementById('leg-panel');
 LEGEND.forEach(item => {{
   const d = document.createElement('div');
@@ -456,10 +340,7 @@ LEGEND.forEach(item => {{
 }});
 function toggleLeg() {{ legPanel.classList.toggle('open'); }}
 
-// =======================================================
-// JAVASCRIPT PART
-// Origin and destination marker icons and placement
-// =======================================================
+// Pin markers
 function pinIcon(color) {{
   return L.divIcon({{
     html: `<div style="width:16px;height:16px;border-radius:50%;background:${{color}};border:3px solid #fff;box-shadow:0 0 8px ${{color}}"></div>`,
@@ -476,12 +357,7 @@ function placeD(lat, lon) {{
   mD = L.marker([lat,lon], {{icon:pinIcon('#ef4444')}}).bindTooltip('Destination').addTo(map);
 }}
 
-// =======================================================
-// JAVASCRIPT PART
-// Live bus markers
-// - place buses from initial data
-// - subscribe to Supabase real-time updates
-// =======================================================
+// Live buses
 const busM = {{}};
 function busIcon(color, num) {{
   return L.divIcon({{
@@ -514,19 +390,10 @@ if(SUPA_URL && SUPA_KEY) {{
     }}).subscribe();
 }}
 
-// =======================================================
-// JAVASCRIPT PART
-// ROUTING ENGINE
-// This is the main route-finding logic.
-// It checks:
-// 1. direct bus
-// 2. one transfer nearby
-// 3. one transfer via bazaar hub
-// =======================================================
-const XFER_MAX_KM = 0.05;   // 50m max gap for transfer
-const XFER_SAME   = 0.015;  // 15m = same road
+// Routing engine
+const XFER_MAX_KM = 0.05;
+const XFER_SAME   = 0.015;
 
-// Save all route points in memory for distance checks
 const ROUTE_PTS = Object.create(null);
 for(const f of GEOJSON.features||[]) {{
   const name = (f.properties && f.properties.layer) || ''; if(!name) continue;
@@ -540,7 +407,6 @@ for(const f of GEOJSON.features||[]) {{
 }}
 const ROUTE_NAMES = Object.keys(ROUTE_PTS);
 
-// Haversine formula: calculates distance between two coordinates
 function hav(la1,lo1,la2,lo2) {{
   const R=6371, r=Math.PI/180;
   const dla=(la2-la1)*r, dlo=(lo2-lo1)*r;
@@ -548,7 +414,6 @@ function hav(la1,lo1,la2,lo2) {{
   return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
 }}
 
-// Find nearest point on a route to a given location
 function nearestOnRoute(lat, lon, name) {{
   let best=Infinity, bestPt=null;
   for(const p of (ROUTE_PTS[name]||[])) {{
@@ -558,7 +423,6 @@ function nearestOnRoute(lat, lon, name) {{
   return {{km:best, pt:bestPt}};
 }}
 
-// Find routes near a location within max walking distance
 function nearbyRoutes(lat, lon, maxKm) {{
   const out=[];
   for(const name of ROUTE_NAMES) {{
@@ -568,7 +432,6 @@ function nearbyRoutes(lat, lon, maxKm) {{
   return out.sort((a,b)=>a.km-b.km);
 }}
 
-// Find closest approach between two routes
 function closestApproach(nameA, nameB) {{
   const ptsA=ROUTE_PTS[nameA]||[], ptsB=ROUTE_PTS[nameB]||[];
   if(!ptsA.length||!ptsB.length) return {{gapKm:Infinity,ptA:null,ptB:null}};
@@ -583,7 +446,6 @@ function closestApproach(nameA, nameB) {{
   return {{gapKm:best, ptA, ptB}};
 }}
 
-// Precompute route-to-route closeness for faster routing
 const APPROACH = Object.create(null);
 for(const a of ROUTE_NAMES) {{
   APPROACH[a] = Object.create(null);
@@ -592,13 +454,6 @@ for(const a of ROUTE_NAMES) {{
   }}
 }}
 
-// =======================================================
-// JAVASCRIPT PART
-// App state variables
-// ptO = origin point
-// ptD = destination point
-// extra markers/lines used during transfers
-// =======================================================
 let ptO=null, ptD=null;
 let _dropMarker=null, _boardMarker=null, _walkLine=null, _walkLine2=null;
 function clearXferLayers() {{
@@ -606,15 +461,6 @@ function clearXferLayers() {{
   _dropMarker=_boardMarker=_walkLine=_walkLine2=null;
 }}
 
-// =======================================================
-// JAVASCRIPT PART
-// Main route computation
-// It tries:
-/// 1) direct route
-/// 2) one transfer on crossing road
-/// 3) via bazaar hub
-// Then shows result card and map highlights
-// =======================================================
 function compute() {{
   clearXferLayers();
   if(!ptO||!ptD) {{ hideResult(); return; }}
@@ -622,15 +468,12 @@ function compute() {{
   const atO=nearbyRoutes(ptO.lat,ptO.lon,MAX_WALK);
   const atD=nearbyRoutes(ptD.lat,ptD.lon,MAX_WALK);
 
-  if(!atO.length) {{ showErr('دەستپێکردنت زیاتر لە '+Math.round(MAX_WALK*1000)+' م دوورە لە هیچ هێڵێک'); return; }}
-  if(!atD.length) {{ showErr('مەوداکەت زیاتر لە '+Math.round(MAX_WALK*1000)+' م دوورە لە هیچ هێڵێک'); return; }}
+  if(!atO.length) {{ showErr('شوێنی دەستپێک لە هیچ هێڵێکی بەس نزیک نییە'); return; }}
+  if(!atD.length) {{ showErr('شوێنی مەودا لە هیچ هێڵێکی بەس نزیک نییە'); return; }}
 
   const namesAtD = new Set(atD.map(r=>r.name));
 
-  // -----------------------------------------------------
-  // CASE 1: Direct route
-  // Same bus line is near both start and destination
-  // -----------------------------------------------------
+  // CASE 1: Direct
   const directs = atO.filter(r=>namesAtD.has(r.name));
   if(directs.length>0) {{
     let best=null, bestTotal=Infinity;
@@ -640,19 +483,23 @@ function compute() {{
     }}
     const walkD=atD.find(r=>r.name===best.name).km;
     const alts=directs.filter(r=>r.name!==best.name);
-    _dropMarker=pulseMarker(best.boardPt.lat,best.boardPt.lon,'#22c55e','سەر پاسەکە کەوە');
     const dropPt=nearestOnRoute(ptD.lat,ptD.lon,best.name).pt;
-    _boardMarker=pulseMarker(dropPt.lat,dropPt.lon,'#22c55e','بڵێ: دابەزین هەیە');
+    _dropMarker=pulseMarker(best.boardPt.lat,best.boardPt.lon,'#22c55e','شوێنی سواربوون');
+    _boardMarker=pulseMarker(dropPt.lat,dropPt.lon,'#22c55e','شوێنی دابەزین');
     drawRoutes(new Set(directs.map(r=>r.name)));
-    showDirect({{lineO:best.name, labelO:best.name.replace(/_/g,' '),
-      walkO_m:Math.round(best.km*1000), walkD_m:Math.round(walkD*1000),
-      boardPt:best.boardPt, dropPt, alts}});
+    showDirect({{
+      lineO:best.name,
+      labelO:best.name.replace(/_/g,' '),
+      walkO_m:Math.round(best.km*1000),
+      walkD_m:Math.round(walkD*1000),
+      boardPt:best.boardPt,
+      dropPt,
+      alts
+    }});
     return;
   }}
 
-  // -----------------------------------------------------
-  // CASE 2: One transfer on nearby road crossing
-  // -----------------------------------------------------
+  // CASE 2: 1 transfer
   let bestT=null, bestScore=Infinity;
   for(const rO of atO) for(const rD of atD) {{
     const app=APPROACH[rO.name]&&APPROACH[rO.name][rD.name];
@@ -664,23 +511,28 @@ function compute() {{
     const {{rO,rD,app}}=bestT;
     const sameRoad=app.gapKm<=XFER_SAME;
     drawRoutes(new Set([rO.name,rD.name]));
-    _dropMarker=pulseMarker(app.ptA.lat,app.ptA.lon,'#fbbf24','بڵێ: دابەزین هەیە — شوێنی گۆڕین');
-    _boardMarker=pulseMarker(app.ptB.lat,app.ptB.lon,'#60a5fa','سەر پاسی '+rD.name.replace(/_/g,' ')+' کەوە');
+    _dropMarker=pulseMarker(app.ptA.lat,app.ptA.lon,'#fbbf24','لەوێ دابەزە');
+    _boardMarker=pulseMarker(app.ptB.lat,app.ptB.lon,'#60a5fa','لەوێ سوار ببە');
     if(!sameRoad && app.gapKm>0.01)
       _walkLine=L.polyline([[app.ptA.lat,app.ptA.lon],[app.ptB.lat,app.ptB.lon]],
         {{color:'#fbbf24',weight:2,dashArray:'6 5',opacity:0.8}}).addTo(map);
-    showTransfer({{lineO:rO.name, labelO:rO.name.replace(/_/g,' '),
-      lineD:rD.name, labelD:rD.name.replace(/_/g,' '),
-      walkO_m:Math.round(rO.km*1000), walkD_m:Math.round(rD.km*1000),
-      xferWalk_m:Math.round(app.gapKm*1000), sameRoad,
-      dropPt:app.ptA, boardPt:app.ptB, viaBazaar:false}});
+    showTransfer({{
+      lineO:rO.name,
+      labelO:rO.name.replace(/_/g,' '),
+      lineD:rD.name,
+      labelD:rD.name.replace(/_/g,' '),
+      walkO_m:Math.round(rO.km*1000),
+      walkD_m:Math.round(rD.km*1000),
+      xferWalk_m:Math.round(app.gapKm*1000),
+      sameRoad,
+      dropPt:app.ptA,
+      boardPt:app.ptB,
+      viaBazaar:false
+    }});
     return;
   }}
 
-  // -----------------------------------------------------
-  // CASE 3: Transfer via bazaar hub
-  // Used when no direct or nearby crossing transfer works
-  // -----------------------------------------------------
+  // CASE 3: Via Bazaar hub
   const allEnds=[];
   for(const name of ROUTE_NAMES) {{
     const pts=ROUTE_PTS[name]; if(!pts.length) continue;
@@ -707,28 +559,32 @@ function compute() {{
   if(bestB) {{
     const {{rO,rD,bzA,bzB,bazaarWalk}}=bestB;
     drawRoutes(new Set([rO.name,rD.name]));
-    _dropMarker=pulseMarker(rO.boardPt.lat,rO.boardPt.lon,'#22c55e','سەر پاسی '+rO.name.replace(/_/g,' ')+' کەوە');
-    _boardMarker=pulseMarker(bzA.lat,bzA.lon,'#fbbf24','پاسەکە لە بازاڕ دەوەستێت بە خۆی');
-    _walkLine=pulseMarker(bzB.lat,bzB.lon,'#60a5fa','سەر پاسی '+rD.name.replace(/_/g,' ')+' کەوە');
+    _dropMarker=pulseMarker(rO.boardPt.lat,rO.boardPt.lon,'#22c55e','شوێنی سواربوونی یەکەم');
+    _boardMarker=pulseMarker(bzA.lat,bzA.lon,'#fbbf24','لەوێ دابەزە');
+    _walkLine=pulseMarker(bzB.lat,bzB.lon,'#60a5fa','لەوێ سوار ببە');
     if(bazaarWalk>0.01)
       _walkLine2=L.polyline([[bzA.lat,bzA.lon],[bzB.lat,bzB.lon]],
         {{color:'#fbbf24',weight:2,dashArray:'6 5',opacity:0.8}}).addTo(map);
-    showTransfer({{lineO:rO.name, labelO:rO.name.replace(/_/g,' '),
-      lineD:rD.name, labelD:rD.name.replace(/_/g,' '),
-      walkO_m:Math.round(rO.km*1000), walkD_m:Math.round(rD.km*1000),
-      xferWalk_m:Math.round(bazaarWalk*1000), sameRoad:bazaarWalk<=XFER_SAME,
-      dropPt:bzA, boardPt:bzB, viaBazaar:true}});
+    showTransfer({{
+      lineO:rO.name,
+      labelO:rO.name.replace(/_/g,' '),
+      lineD:rD.name,
+      labelD:rD.name.replace(/_/g,' '),
+      walkO_m:Math.round(rO.km*1000),
+      walkD_m:Math.round(rD.km*1000),
+      xferWalk_m:Math.round(bazaarWalk*1000),
+      sameRoad:bazaarWalk<=XFER_SAME,
+      dropPt:bzA,
+      boardPt:bzB,
+      viaBazaar:true
+    }});
     return;
   }}
 
-  // No route found
-  showErr('هیچ هێڵێک نەدۆزرایەوە.');
+  showErr('هیچ ڕێگایەک نەدۆزرایەوە');
 }}
 
-// =======================================================
-// JAVASCRIPT PART
-// Animated pulse marker for important points
-// =======================================================
+// Pulse marker
 function pulseMarker(lat, lon, color, tip) {{
   const icon = L.divIcon({{
     html:`<div style="width:18px;height:18px;border-radius:50%;background:${{color}};border:3px solid #fff;box-shadow:0 0 0 0 ${{color}}88;animation:ripple 1.4s infinite;"></div>`,
@@ -743,18 +599,14 @@ if(!document.getElementById('ripple-style')) {{
   document.head.appendChild(s);
 }}
 
-// =======================================================
-// JAVASCRIPT PART
-// Result card UI builders
-// These create the instructions shown to the user
-// =======================================================
+// Result renderers
 function legRow(chips, label, detail) {{
   const chipHtml = chips.map(c => {{
-    if(c.type==='walk') return `<span class="leg-chip walk">🚶 ${{c.label}}</span>`;
+    if(c.type==='walk') return `<span class="leg-chip walk">${{c.label}}</span>`;
     if(c.type==='bus')  return `<span class="leg-chip bus" style="background:${{c.color}}22;border-color:${{c.color}}66;color:${{c.color}}">${{c.label}}</span>`;
-    if(c.type==='xfer') return `<span class="leg-chip xfer">🔁</span>`;
+    if(c.type==='xfer') return `<span class="leg-chip xfer">گۆڕین</span>`;
     return '';
-  }}).join('<span class="leg-arr">›</span>');
+  }}).join('<span class="leg-arr">•</span>');
   return `<div class="leg" onclick="this.classList.toggle('open')">
     <div class="leg-top">
       <div class="leg-chips">${{chipHtml}}</div>
@@ -765,74 +617,69 @@ function legRow(chips, label, detail) {{
   </div>`;
 }}
 
-// Show direct-route instructions
 function showDirect(r) {{
   const c = COLORS[r.lineO]||'#888';
   const altsHtml = r.alts.length
-    ? ' · '+r.alts.map(a=>`<span style="color:${{COLORS[a.name]||'#888'}}">${{a.name.replace(/_/g,' ')}}</span>`).join(' / ')
+    ? ' · ' + r.alts.map(a=>`<span style="color:${{COLORS[a.name]||'#888'}}">${{a.name.replace(/_/g,' ')}}</span>`).join(' / ')
     : '';
+
   document.getElementById('result-inner').innerHTML =
-    `<div class="summary ok">✅ ڕاستەوخۆ — گۆڕین پێویست نیە</div><div class="legs">` +
-    legRow([{{type:'walk',label:r.walkO_m+'م'}}],
-      `بڕۆ بۆ شەقامی <strong style="color:${{c}}">${{r.labelO}}</strong>`+altsHtml,
-      `پێویستە <strong>${{r.walkO_m}} م</strong> بە پێ بڕۆی — 🟢 خاڵی سەوز لەسەر نەخشەکە`) +
+    `<div class="summary ok">پێویستت بە یەک بەسە</div><div class="legs">` +
+    legRow([{{type:'walk',label:r.walkO_m+' م'}}],
+      `پێویستە <strong>${{r.walkO_m}} م</strong> پیاسە بکەیت بۆ سواربوون لە هێڵی <strong style="color:${{c}}">${{r.labelO}}</strong>${{altsHtml}}`,
+      `شوێنی سواربوون لەسەر نەخشە دیار کراوە`) +
     legRow([{{type:'bus',label:r.labelO,color:c}}],
-      `دەست ڕاگرە · سەر پاسەکە بکەوە · بڵێ <em>"دابەزین هەیە"</em>`,
-      `شوفێر دەوەستێت ئەگەر ڕێگا هەبێت — 🟢 خاڵی سەوز = شوێنی دابەزین`) +
-    legRow([{{type:'walk',label:r.walkD_m+'م'}}],
-      `پێویستە <strong>${{r.walkD_m}} م</strong> بە پێ بڕۆی — گەیشتیت! 🎉`, null) +
+      `سوار ببە و بەردەوام بە تا دەگەیتە ئەو خاڵەی لەسەر نەخشە دیار کراوە`,
+      `لەوێ دابەزە`) +
+    legRow([{{type:'walk',label:r.walkD_m+' م'}}],
+      `دوای دابەزین پێویستە <strong>${{r.walkD_m}} م</strong> پیاسە بکەیت`,
+      `گەیشتیت بە مەوداکەت`) +
     `</div>`;
   showCard();
 }}
 
-// Show one-transfer instructions
 function showTransfer(r) {{
   const cO=COLORS[r.lineO]||'#888', cD=COLORS[r.lineD]||'#888';
-  const xferDetail = r.sameRoad
-    ? `هەمان شەقام — پیاسەکردن پێویست نیە`
-    : `پێویستە <strong>${{r.xferWalk_m}} م</strong> بە پێ بڕۆی — 🟡 زەرد بۆ 🔵 شین لەسەر نەخشەکە`;
-  const dropOffNote = r.viaBazaar
-    ? `پاسەکە لە بازاڕ دەوەستێت بە خۆی — دابەزە`
-    : `بڵێ: <em>"دابەزین هەیە"</em> لە شەقامی ${{r.labelD}} — 🟡 خاڵی زەرد`;
-  const header = r.viaBazaar ? `🔁 یەک گۆڕین — لە ڕێگای بازاڕ` : `🔁 یەک گۆڕین — لە کەنارەی شەقام`;
+  const xferText = r.sameRoad
+    ? `لە هەمان شوێن دەتوانیت بەسی دووەم بگریت`
+    : `دوای دابەزین پێویستە <strong>${{r.xferWalk_m}} م</strong> پیاسە بکەیت بۆ بەسی دووەم`;
+
+  const header = `پێویستت بە دوو بەسە`;
+
   document.getElementById('result-inner').innerHTML =
     `<div class="summary xfr">${{header}}</div><div class="legs">` +
-    legRow([{{type:'walk',label:r.walkO_m+'م'}}],
-      `بڕۆ بۆ شەقامی <strong style="color:${{cO}}">${{r.labelO}}</strong>`,
-      `پێویستە <strong>${{r.walkO_m}} م</strong> بە پێ بڕۆی — 🟢 خاڵی سەوز`) +
+    legRow([{{type:'walk',label:r.walkO_m+' م'}}],
+      `پێویستە <strong>${{r.walkO_m}} م</strong> پیاسە بکەیت بۆ سواربوون لە <strong style="color:${{cO}}">${{r.labelO}}</strong>`,
+      `شوێنی سواربوونی یەکەم لەسەر نەخشە دیار کراوە`) +
     legRow([{{type:'bus',label:r.labelO,color:cO}}],
-      `دەست ڕاگرە · سەر پاسەکە بکەوە · ${{dropOffNote}}`,
-      `سەر پاسەکە بکەوە بە تاوەکو خاڵی زەرد`) +
-    legRow([{{type:'xfer'}},{{type:'walk',label:r.xferWalk_m+'م'}}],
-      xferDetail,
-      r.sameRoad ? `هەمان شەقام` : `🟡 دابەزە — 🔵 خاڵی شین = شوێنی سەرکەوتن لە ${{r.labelD}}`) +
+      `سوار ببە و بەردەوام بە تا دەگەیتە خاڵی دابەزین`,
+      `لەو خاڵە دابەزە`) +
+    legRow([{{type:'xfer'}},{{type:'walk',label:r.xferWalk_m+' م'}}],
+      xferText,
+      `شوێنی سواربوونی بەسی دووەم لەسەر نەخشە دیار کراوە`) +
     legRow([{{type:'bus',label:r.labelD,color:cD}}],
-      `دەست ڕاگرە · سەر پاسی <strong style="color:${{cD}}">${{r.labelD}}</strong> بکەوە · بڵێ <em>"دابەزین هەیە"</em>`,
-      `سەر پاسەکە بکەوە بە تاوەکو مەوداکەت`) +
-    legRow([{{type:'walk',label:r.walkD_m+'م'}}],
-      `پێویستە <strong>${{r.walkD_m}} م</strong> بە پێ بڕۆی — گەیشتیت! 🎉`, null) +
+      `پاشان سوار ببە لە <strong style="color:${{cD}}">${{r.labelD}}</strong> و بەردەوام بە بۆ نزیکترین خاڵی مەودا`,
+      `لەو شوێنە دابەزە`) +
+    legRow([{{type:'walk',label:r.walkD_m+' م'}}],
+      `لە کۆتاییدا پێویستە <strong>${{r.walkD_m}} م</strong> پیاسە بکەیت`,
+      `گەیشتیت بە مەوداکەت`) +
     `</div>`;
   showCard();
 }}
 
-// Show error if no valid route
 function showErr(msg) {{
-  document.getElementById('result-inner').innerHTML=`<div class="summary err">⚠️ ${{msg}}</div>`;
+  document.getElementById('result-inner').innerHTML=`<div class="summary err">${{msg}}</div>`;
   showCard();
 }}
 
-// =======================================================
-// JAVASCRIPT PART
-// Show/hide result card and switch between floating and
-// bottom-sheet style
-// =======================================================
+// Result card show/hide/mode
 let _resultMode = 'float';
 function showCard() {{
   const rc  = document.getElementById('result-card');
   const btn = document.getElementById('result-toggle');
   rc.classList.remove('bottom'); rc.classList.add('float');
   _resultMode = 'float';
-  btn.textContent = '▤ خوارەوە';
+  btn.textContent = 'خوارەوە';
   rc.classList.add('show');
   btn.style.display = 'flex';
 }}
@@ -850,14 +697,10 @@ function cycleResultMode() {{
   _resultMode = (_resultMode==='float') ? 'bottom' : 'float';
   rc.classList.add(_resultMode);
   rc.classList.add('show');
-  btn.textContent = _resultMode==='float' ? '▤ خوارەوە' : '⊟ سەرەوە';
+  btn.textContent = _resultMode==='float' ? 'خوارەوە' : 'سەرەوە';
 }}
 
-// =======================================================
-// JAVASCRIPT PART
-// Map click picking mode
-// Lets user click map to choose origin and destination
-// =======================================================
+// Map click picking
 let mode = '';
 function toggleMode(m) {{
   mode = (mode===m) ? '' : m;
@@ -886,11 +729,7 @@ map.on('click', e => {{
   compute();
 }});
 
-// =======================================================
-// JAVASCRIPT PART
 // Manual coordinate input
-// User can type latitude, longitude directly
-// =======================================================
 function parseCoord(raw) {{
   const s=raw.trim().replace(/\s*,\s*/g,',');
   const parts=s.includes(',')?s.split(','):s.split(/\s+/);
@@ -910,10 +749,7 @@ function onCoordInput(which, val) {{
   compute();
 }}
 
-// =======================================================
-// JAVASCRIPT PART
-// Clear one point or reset the whole app state
-// =======================================================
+// Clear/reset
 let _gpsCircle = null;
 function clearPt(which) {{
   if(which==='origin') {{
@@ -936,15 +772,11 @@ function resetAll() {{
   map.getContainer().classList.remove('picking');
 }}
 
-// =======================================================
-// JAVASCRIPT PART
-// GPS location button
-// Finds user's current location and puts it as origin
-// =======================================================
+// GPS tracking
 function useMyLocation() {{
   const btn = document.getElementById('recenter-btn');
   if(!navigator.geolocation) {{
-    alert('بەدبەختانە، ئەم براوزەرە شوێننیشاندەر پشتگیری ناکات');
+    alert('ئەم براوزەرە شوێننیشاندەر پشتگیری ناکات');
     return;
   }}
   btn.classList.add('locating');
@@ -973,11 +805,12 @@ function useMyLocation() {{
   );
 }}
 
-// =======================================================
-// JAVASCRIPT PART
-// Resize helper
-// Sends height to parent Streamlit iframe so the map fits
-// =======================================================
+// Back to default Sulaymaniyah view
+function goDefaultView() {{
+  map.setView([{DEFAULT_CENTER[0]}, {DEFAULT_CENTER[1]}], {DEFAULT_ZOOM});
+}}
+
+// Resize
 function resize() {{
   window.parent.postMessage({{type:'resize_map', height:window.innerHeight||900}},'*');
 }}
@@ -988,16 +821,6 @@ window.addEventListener('resize', resize);
 </html>"""
 
 
-# =========================================================
-# PYTHON FUNCTION
-# Main app function.
-# Steps:
-# 1. load route file
-# 2. fetch live buses
-# 3. get Supabase keys from secrets
-# 4. render the HTML app
-# 5. add JS to auto-resize iframe height
-# =========================================================
 def main():
     try:
         routes_geojson = load_routes(ROUTES_FILE)
@@ -1008,11 +831,9 @@ def main():
     supa_url = st.secrets.get("SUPABASE_URL", "")      if hasattr(st, "secrets") else ""
     supa_key = st.secrets.get("SUPABASE_ANON_KEY", "") if hasattr(st, "secrets") else ""
 
-    # Show the big custom HTML map app
     components.html(build_map_html(routes_geojson, live_buses, supa_url, supa_key),
                     height=900, scrolling=False)
 
-    # Resize helper script for Streamlit iframe
     components.html("""<script>
     window.addEventListener('message', function(e) {
         if(!e.data || e.data.type !== 'resize_map') return;
@@ -1027,9 +848,5 @@ def main():
     </script>""", height=0)
 
 
-# =========================================================
-# PYTHON ENTRY POINT
-# This runs the app when the file is executed directly.
-# =========================================================
 if __name__ == "__main__":
     main()
