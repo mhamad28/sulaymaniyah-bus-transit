@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 
 import pandas as pd
 import streamlit as st
@@ -23,7 +23,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-
 # =========================================================
 # 2. DATA FUNCTIONS
 # =========================================================
@@ -33,7 +32,6 @@ def get_fleet_data():
         return res.data or []
     except Exception:
         return []
-
 
 def get_history_stats(plate):
     try:
@@ -48,11 +46,44 @@ def get_history_stats(plate):
     except Exception:
         return []
 
+# =========================================================
+# 3. LOAD DATA FOR UI CONTROLS
+# =========================================================
+fleet = get_fleet_data()
+fleet_bus_ids = sorted({str(b.get("plate_number", "")) for b in fleet if b.get("plate_number") is not None})
+
+# Optional: if you want selector to still show buses even when offline today,
+# you can also pull unique ids from history later. For now it uses live fleet.
+bus_options = ["All buses"] + fleet_bus_ids
 
 # =========================================================
-# 3. MAP HTML
-# Live data updates inside JS every 10 seconds.
-# History lines load for selected date and can also refresh.
+# 4. SIDEBAR CONTROLS
+# =========================================================
+st.sidebar.header("🕹️ Controls")
+
+show_live = st.sidebar.toggle("Show live buses", value=True)
+show_history = st.sidebar.toggle("Show history lines", value=True)
+
+date_mode = st.sidebar.radio("History date mode", ["Today", "Custom"], index=0)
+
+if date_mode == "Today":
+    selected_date = date.today()
+else:
+    selected_date = st.sidebar.date_input("Choose date", value=date.today())
+
+selected_date_str = selected_date.strftime("%Y-%m-%d")
+
+selected_bus = st.sidebar.selectbox(
+    "Select bus for history",
+    bus_options,
+    index=0
+)
+
+st.sidebar.caption(f"History date: {selected_date_str}")
+st.sidebar.caption(f"Selected bus: {selected_bus}")
+
+# =========================================================
+# 5. MAP HTML
 # =========================================================
 def build_map_html(
     supabase_url: str,
@@ -60,6 +91,7 @@ def build_map_html(
     show_live: bool,
     show_history: bool,
     selected_date_str: str,
+    selected_bus: str,
 ) -> str:
     return f"""
     <!DOCTYPE html>
@@ -120,7 +152,7 @@ def build_map_html(
                 line-height: 1.5;
                 backdrop-filter: blur(8px);
                 box-shadow: 0 4px 16px rgba(0,0,0,.35);
-                min-width: 170px;
+                min-width: 200px;
             }}
             .map-btn {{
                 position: absolute;
@@ -152,9 +184,12 @@ def build_map_html(
         <div id="map"></div>
         <button id="fit-live-btn" class="map-btn" onclick="fitToLive()">Fit Live</button>
         <button id="fit-history-btn" class="map-btn" onclick="fitToHistory()">Fit History</button>
+
         <div class="map-badge" id="status-badge">Map ready</div>
+
         <div class="mini-info" id="mini-info">
             <div><strong>Selected date:</strong> {selected_date_str}</div>
+            <div><strong>Selected bus:</strong> {selected_bus}</div>
             <div><strong>Live buses:</strong> <span id="live-count">0</span></div>
             <div><strong>History buses:</strong> <span id="history-count">0</span></div>
         </div>
@@ -165,6 +200,7 @@ def build_map_html(
             const SHOW_LIVE = {str(show_live).lower()};
             const SHOW_HISTORY = {str(show_history).lower()};
             const SELECTED_DATE = "{selected_date_str}";
+            const SELECTED_BUS = "{selected_bus}";
             const REFRESH_MS = 10000;
             const DEFAULT_CENTER = [35.56, 45.43];
             const DEFAULT_ZOOM = 12;
@@ -272,7 +308,11 @@ def build_map_html(
 
                 for (const row of (result.data || [])) {{
                     if (row.lat === null || row.lon === null) continue;
+
                     const plate = String(row.plate_number);
+
+                    if (SELECTED_BUS !== "All buses" && plate !== SELECTED_BUS) continue;
+
                     if (!grouped[plate]) grouped[plate] = [];
                     grouped[plate].push([row.lat, row.lon]);
                 }}
@@ -306,6 +346,11 @@ def build_map_html(
 
                 for (const bus of fleet) {{
                     const plate = String(bus.plate_number);
+
+                    if (SELECTED_BUS !== "All buses" && plate !== SELECTED_BUS) {{
+                        continue;
+                    }}
+
                     const color = colorFromPlate(plate);
                     activePlates.add(plate);
 
@@ -338,10 +383,11 @@ def build_map_html(
                     }}
 
                     const coords = await fetchRecentPath(plate);
+
                     if (coords.length > 1) {{
                         if (liveTrails[plate]) {{
                             liveTrails[plate].setLatLngs(coords);
-                            liveTrails[plate].setStyle({{ color }});
+                            liveTrails[plate].setStyle({{ color: color }});
                         }} else {{
                             liveTrails[plate] = L.polyline(coords, {{
                                 color: color,
@@ -399,7 +445,8 @@ def build_map_html(
                     .bindTooltip(
                         "<b>Bus:</b> " + plate +
                         "<br><b>Date:</b> " + SELECTED_DATE +
-                        "<br><b>Points:</b> " + coords.length
+                        "<br><b>Points:</b> " + coords.length +
+                        "<br><b>Status:</b> History"
                     );
                 }});
 
@@ -430,29 +477,8 @@ def build_map_html(
     </html>
     """
 
-
 # =========================================================
-# 4. SIDEBAR CONTROLS
-# =========================================================
-st.sidebar.header("🕹️ Controls")
-
-show_live = st.sidebar.toggle("Show live buses", value=True)
-show_history = st.sidebar.toggle("Show history lines", value=True)
-
-date_mode = st.sidebar.radio("History date mode", ["Today", "Custom"], index=0)
-
-if date_mode == "Today":
-    selected_date = date.today()
-else:
-    selected_date = st.sidebar.date_input("Choose date", value=date.today())
-
-selected_date_str = selected_date.strftime("%Y-%m-%d")
-
-st.sidebar.caption(f"History date: {selected_date_str}")
-
-
-# =========================================================
-# 5. PAGE UI
+# 6. PAGE UI
 # =========================================================
 st.title("Fleet Manager")
 
@@ -463,11 +489,9 @@ with top_col_1:
 with top_col_2:
     st.caption("The map updates by itself every 10 seconds without redrawing the whole page.")
 
-fleet = get_fleet_data()
-
 st.metric("Total Active Buses", len(fleet))
 
-st.subheader("🚐 Current Active Fleet")
+st.subheader("🚌 Current Active Fleet")
 
 if fleet:
     for bus in fleet:
@@ -497,6 +521,7 @@ components.html(
         show_live=show_live,
         show_history=show_history,
         selected_date_str=selected_date_str,
+        selected_bus=selected_bus,
     ),
     height=640,
 )
