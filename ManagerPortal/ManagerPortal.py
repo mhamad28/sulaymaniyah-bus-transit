@@ -1,103 +1,126 @@
 import streamlit as st
 from supabase import create_client, Client
 import pandas as pd
-import pydeck as pdk
+import json
+import streamlit.components.v1 as components
 from datetime import datetime
-from streamlit_autorefresh import st_autorefresh
 
-# --- 1. SETUP ---
+# --- 1. CONFIG & SUPABASE ---
+st.set_page_config(page_title="Suly Transit – Manager", layout="wide")
+
 URL = st.secrets["SUPABASE_URL"]
 KEY = st.secrets["SUPABASE_ANON_KEY"]
 supabase: Client = create_client(URL, KEY)
 
-st.set_page_config(page_title="Suly Transit – Manager Dashboard", layout="wide")
+# Hide Streamlit elements for a clean dashboard look
+st.markdown("""
+<style>
+    header {display: none !important;}
+    footer {display: none !important;}
+    .block-container {padding-top: 2rem !important;}
+</style>
+""", unsafe_allow_html=True)
 
-# This automatically refreshes the data every 10 seconds WITHOUT locking the UI
-st_autorefresh(interval=10000, key="datarefresh")
-
-# --- 2. DATA FETCHING ---
-def get_live_data():
+# --- 2. DATA FUNCTIONS ---
+def get_fleet_data():
     try:
+        # Fetch live buses
         res = supabase.table("live_bus_data").select("*").execute()
-        return pd.DataFrame(res.data)
+        return res.data
     except:
-        return pd.DataFrame()
+        return []
 
-def get_bus_stats(plate):
+def get_history_stats(plate):
     try:
+        # Fetch points for the research stats
         res = supabase.table("bus_location_history") \
-            .select("*") \
+            .select("recorded_at") \
             .eq("plate_number", plate) \
             .order("recorded_at", desc=False) \
             .execute()
-        return pd.DataFrame(res.data)
+        return res.data
     except:
-        return pd.DataFrame()
+        return []
 
-# --- 3. UI LAYOUT ---
+# --- 3. THE LEAFLET MAP HTML ---
+def build_map_html(buses_json):
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+        <style>
+            #map {{ height: 500px; width: 100%; border-radius: 15px; border: 2px solid #333; }}
+            body {{ margin: 0; background: #0e1117; }}
+        </style>
+    </head>
+    <body>
+        <div id="map"></div>
+        <script>
+            const map = L.map('map').setView([35.56, 45.43], 12);
+            L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png').addTo(map);
+
+            const buses = {buses_json};
+            buses.forEach(b => {{
+                L.circleMarker([b.lat, b.lon], {{
+                    radius: 8,
+                    fillColor: "#22c55e",
+                    color: "#fff",
+                    weight: 2,
+                    opacity: 1,
+                    fillOpacity: 0.8
+                }}).addTo(map).bindTooltip("Bus: " + b.plate_number + "<br>Line: " + b.line_id);
+            }});
+        </script>
+    </body>
+    </html>
+    """
+
+# --- 4. UI LAYOUT ---
 st.title("📊 Fleet Research Manager")
 
-df_live = get_live_data()
+fleet = get_fleet_data()
 
-# Sidebar: These will now work perfectly!
-st.sidebar.header("🕹️ Controls")
-show_map = st.sidebar.toggle("🛰️ View Fleet on Map", value=False)
-map_style = st.sidebar.selectbox("Map Style", ["Satellite", "Dark", "Light"])
-
-if not df_live.empty:
-    st.metric("Total Active Buses", len(df_live))
+if fleet:
+    # Sidebar Toggle for the Map
+    st.sidebar.header("🕹️ Controls")
+    show_map = st.sidebar.toggle("🛰️ Show Satellite Tracking", value=False)
     
-    # --- LIST ALL BUSES ---
+    # Top Level Stats
+    st.metric("Total Active Buses", len(fleet))
+
+    # --- LIST ALL BUSES (RESEARCH CARDS) ---
     st.subheader("🚐 Current Active Fleet")
     
-    for _, bus in df_live.iterrows():
-        # Clean labels for your research
-        with st.expander(f"🚌 Bus {bus['plate_number']} | Line: {bus['line_id']} | Driver: {bus['driver_name']}", expanded=True):
+    for bus in fleet:
+        with st.expander(f"🚌 Bus {bus['plate_number']} | Line: {bus['line_id']}", expanded=True):
             col1, col2, col3 = st.columns(3)
             
-            hist = get_bus_stats(bus['plate_number'])
+            # Get data for research statistics
+            history = get_history_stats(bus['plate_number'])
             
-            if not hist.empty:
-                start_time = pd.to_datetime(hist['recorded_at'].min())
+            if history:
+                start_time = pd.to_datetime(history[0]['recorded_at'])
                 duration = datetime.now(start_time.tzinfo) - start_time
                 
                 col1.metric("Shift Start", start_time.strftime("%H:%M:%S"))
-                col2.metric("Working Time", f"{duration.seconds // 60} min")
-                col3.metric("Data Points Collected", len(hist))
-                
-                # Checkbox now works because the while loop is gone
-                if st.checkbox(f"Show Logs for {bus['plate_number']}", key=f"log_{bus['plate_number']}"):
-                    st.dataframe(hist.tail(10), use_container_width=True)
+                col2.metric("Total Mins", f"{duration.seconds // 60}m")
+                col3.metric("Data Points", len(history))
+            else:
+                st.warning("Gathering initial history data...")
 
-    # --- OPTIONAL MAP VIEW ---
+    # --- THE MAP (IF TOGGLED) ---
     if show_map:
         st.divider()
-        st.subheader(f"🌍 Live {map_style} Tracking")
-        
-        # Map Styles
-        styles = {
-            "Satellite": "mapbox://styles/mapbox/satellite-v9",
-            "Dark": "mapbox://styles/mapbox/dark-v10",
-            "Light": "mapbox://styles/mapbox/light-v10"
-        }
-        
-        view = pdk.ViewState(latitude=df_live["lat"].mean(), longitude=df_live["lon"].mean(), zoom=11)
-        layer = pdk.Layer(
-            "ScatterplotLayer",
-            df_live,
-            get_position='[lon, lat]',
-            get_color='[34, 197, 94, 255]', 
-            get_radius=250,
-            pickable=True
-        )
-        
-        st.pydeck_chart(pdk.Deck(
-            layers=[layer],
-            initial_view_state=view,
-            map_style=styles[map_style],
-            tooltip={"text": "Bus: {plate_number}\nDriver: {driver_name}"}
-        ))
+        st.subheader("🌍 Live Fleet Positions")
+        # Pass the fleet data to the Leaflet HTML
+        buses_json = json.dumps(fleet)
+        components.html(build_map_html(buses_json), height=520)
 
 else:
-    st.warning("No buses are currently reporting data.")
-    
+    st.info("Waiting for drivers to log in...")
+
+# Auto-refresh button (Standard Streamlit way to refresh the dashboard)
+if st.button("🔄 Refresh Data Now"):
+    st.rerun()
