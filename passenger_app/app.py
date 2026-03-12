@@ -32,6 +32,19 @@ DEFAULT_ZOOM   = 13
 MAX_WALK_KM    = 0.70
 
 ROUTE_COLORS: Dict[str, str] = {
+    "Bakrajo_Bazar":      "#e41a1c",
+    "Chwarchra_Bazar":    "#377eb8",
+    "FarmanBaran_Bazar":  "#4daf4a",
+    "HawaryShar_Bazar":   "#984ea3",
+    "Kazywa_Bazar":       "#ff7f00",
+    "Kshtukal_Bazar":     "#a65628",
+    "Qrgra_Bazar":        "#f781bf",
+    "Raparin_Bazar":      "#999999",
+    "Rzgary Bazar":       "#66c2a5",
+    "Shakraka_Bazar":     "#fc8d62",
+    "TwiMalik_Bazar":     "#8da0cb",
+    "Xabat_Bazar":        "#ffd92f",
+    "ZargatayTaza_Bazar": "#1b9e77",
 }
 
 @st.cache_data(hash_funcs={Path: lambda p: p.stat().st_mtime if p.exists() else 0})
@@ -85,10 +98,10 @@ html,body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
   box-shadow:0 8px 32px rgba(0,0,0,0.5); color:#e2eaf4;
 }}
 
-/* BUTTONS RIGHT SIDE */
+/* RIGHT SIDE BUTTONS */
 #recenter-btn {{
   position: absolute; bottom: 110px; right: 20px; z-index: 1001;
-  width: 50px; height: 50px; border-radius: 12px; background: #000000; 
+  width: 50px; height: 50px; border-radius: 12px; background: #000000;
   border: 1px solid rgba(255,255,255,0.2); cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   box-shadow: 0 4px 15px rgba(0,0,0,0.5); transition: all 0.2s;
@@ -115,6 +128,7 @@ html,body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
 }}
 #home-btn:active {{ transform: scale(0.9); }}
 
+/* TOP PANEL */
 #top-panel {{
   position:absolute; top:14px; left:50%; transform:translateX(-50%);
   z-index:1000; width:min(520px,92vw); padding:12px 14px;
@@ -242,6 +256,23 @@ html,body {{ width:100%; height:100%; background:#080d14; overflow:hidden;
   background:rgba(10,16,26,.88) !important; color:#e2eaf4 !important;
   border:1px solid rgba(255,255,255,.10) !important;
 }}
+
+/* LAYER SWITCHER STYLE */
+.leaflet-control-layers {{
+  background: rgba(10,16,26,.92) !important;
+  color: #e2eaf4 !important;
+  border: 1px solid rgba(255,255,255,.10) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 4px 16px rgba(0,0,0,.4) !important;
+}}
+.leaflet-control-layers-expanded {{
+  padding: 10px 12px !important;
+  color: #e2eaf4 !important;
+}}
+.leaflet-control-layers label {{
+  color: #e2eaf4 !important;
+  font-size: 12px;
+}}
 </style>
 </head>
 <body>
@@ -292,35 +323,38 @@ const SUPA_KEY = "{supabase_key}";
 const MAX_WALK = {MAX_WALK_KM};
 
 // Map
-const map = L.map('map', {
-  center: [35.56, 45.43],
-  zoom: 13,
+const map = L.map('map', {{
+  center: [{DEFAULT_CENTER[0]}, {DEFAULT_CENTER[1]}],
+  zoom: {DEFAULT_ZOOM},
   minZoom: 10,
   maxZoom: 19
-});
+}});
 
-const streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+const streetLayer = L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
   attribution: '© OpenStreetMap',
   maxZoom: 19
-});
+}});
 
-const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-  attribution: 'Tiles © Esri',
-  maxZoom: 19
-});
+const satelliteLayer = L.tileLayer(
+  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}',
+  {{
+    attribution: 'Tiles © Esri',
+    maxZoom: 19
+  }}
+);
 
 streetLayer.addTo(map);
 
 L.control.layers(
-  {
+  {{
     "Map": streetLayer,
     "Satellite": satelliteLayer
-  },
+  }},
   null,
-  {
+  {{
     position: 'topleft',
     collapsed: true
-  }
+  }}
 ).addTo(map);
 
 // Routes
@@ -397,7 +431,10 @@ if(SUPA_URL && SUPA_KEY) {{
     {{event:'*', schema:'public', table:'active_locations'}}, p => {{
       const b = p.new; if(!b) return;
       if(b.is_active) placeBus(b);
-      else if(busM[b.bus_number]) {{ map.removeLayer(busM[b.bus_number]); delete busM[b.bus_number]; }}
+      else if(busM[b.bus_number]) {{
+        map.removeLayer(busM[b.bus_number]);
+        delete busM[b.bus_number];
+      }}
     }}).subscribe();
 }}
 
@@ -406,188 +443,239 @@ const XFER_MAX_KM = 0.05;
 const XFER_SAME   = 0.015;
 
 const ROUTE_PTS = Object.create(null);
-for(const f of GEOJSON.features||[]) {{
-  const name = (f.properties && f.properties.layer) || ''; if(!name) continue;
-  if(!ROUTE_PTS[name]) ROUTE_PTS[name] = [];
+for (const f of GEOJSON.features || []) {{
+  const name = (f.properties && f.properties.layer) || '';
+  if (!name) continue;
+  if (!ROUTE_PTS[name]) ROUTE_PTS[name] = [];
   const geom = f.geometry || {{}};
-  const segs = geom.type==='LineString'      ? [geom.coordinates]
-             : geom.type==='MultiLineString' ?  geom.coordinates : [];
-  for(const seg of segs)
-    for(const c of seg)
-      if(Array.isArray(c) && c.length>=2) ROUTE_PTS[name].push({{lat:c[1], lon:c[0]}});
+  const segs = geom.type === 'LineString' ? [geom.coordinates]
+             : geom.type === 'MultiLineString' ? geom.coordinates : [];
+  for (const seg of segs) {{
+    for (const c of seg) {{
+      if (Array.isArray(c) && c.length >= 2) ROUTE_PTS[name].push({{lat:c[1], lon:c[0]}});
+    }}
+  }}
 }}
 const ROUTE_NAMES = Object.keys(ROUTE_PTS);
 
-function hav(la1,lo1,la2,lo2) {{
-  const R=6371, r=Math.PI/180;
-  const dla=(la2-la1)*r, dlo=(lo2-lo1)*r;
-  const a=Math.sin(dla/2)**2+Math.cos(la1*r)*Math.cos(la2*r)*Math.sin(dlo/2)**2;
-  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+function hav(la1, lo1, la2, lo2) {{
+  const R = 6371, r = Math.PI / 180;
+  const dla = (la2 - la1) * r, dlo = (lo2 - lo1) * r;
+  const a = Math.sin(dla/2)**2 + Math.cos(la1*r) * Math.cos(la2*r) * Math.sin(dlo/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }}
 
 function nearestOnRoute(lat, lon, name) {{
-  let best=Infinity, bestPt=null;
-  for(const p of (ROUTE_PTS[name]||[])) {{
-    const d=hav(lat,lon,p.lat,p.lon);
-    if(d<best){{best=d; bestPt=p;}}
+  let best = Infinity, bestPt = null;
+  for (const p of (ROUTE_PTS[name] || [])) {{
+    const d = hav(lat, lon, p.lat, p.lon);
+    if (d < best) {{
+      best = d;
+      bestPt = p;
+    }}
   }}
-  return {{km:best, pt:bestPt}};
+  return {{km: best, pt: bestPt}};
 }}
 
 function nearbyRoutes(lat, lon, maxKm) {{
-  const out=[];
-  for(const name of ROUTE_NAMES) {{
-    const {{km,pt}}=nearestOnRoute(lat,lon,name);
-    if(km<=maxKm) out.push({{name,km,boardPt:pt}});
+  const out = [];
+  for (const name of ROUTE_NAMES) {{
+    const {{km, pt}} = nearestOnRoute(lat, lon, name);
+    if (km <= maxKm) out.push({{name, km, boardPt: pt}});
   }}
-  return out.sort((a,b)=>a.km-b.km);
+  return out.sort((a, b) => a.km - b.km);
 }}
 
 function closestApproach(nameA, nameB) {{
-  const ptsA=ROUTE_PTS[nameA]||[], ptsB=ROUTE_PTS[nameB]||[];
-  if(!ptsA.length||!ptsB.length) return {{gapKm:Infinity,ptA:null,ptB:null}};
-  let best=Infinity, ptA=ptsA[0], ptB=ptsB[0];
-  for(let i=0;i<ptsA.length;i++) {{
-    const la=ptsA[i].lat, lo=ptsA[i].lon;
-    for(let j=0;j<ptsB.length;j++) {{
-      const d=hav(la,lo,ptsB[j].lat,ptsB[j].lon);
-      if(d<best){{best=d; ptA=ptsA[i]; ptB=ptsB[j];}}
+  const ptsA = ROUTE_PTS[nameA] || [], ptsB = ROUTE_PTS[nameB] || [];
+  if (!ptsA.length || !ptsB.length) return {{gapKm: Infinity, ptA: null, ptB: null}};
+  let best = Infinity, ptA = ptsA[0], ptB = ptsB[0];
+  for (let i = 0; i < ptsA.length; i++) {{
+    const la = ptsA[i].lat, lo = ptsA[i].lon;
+    for (let j = 0; j < ptsB.length; j++) {{
+      const d = hav(la, lo, ptsB[j].lat, ptsB[j].lon);
+      if (d < best) {{
+        best = d;
+        ptA = ptsA[i];
+        ptB = ptsB[j];
+      }}
     }}
   }}
-  return {{gapKm:best, ptA, ptB}};
+  return {{gapKm: best, ptA, ptB}};
 }}
 
 const APPROACH = Object.create(null);
-for(const a of ROUTE_NAMES) {{
+for (const a of ROUTE_NAMES) {{
   APPROACH[a] = Object.create(null);
-  for(const b of ROUTE_NAMES) {{
-    if(a!==b) APPROACH[a][b] = closestApproach(a,b);
+  for (const b of ROUTE_NAMES) {{
+    if (a !== b) APPROACH[a][b] = closestApproach(a, b);
   }}
 }}
 
-let ptO=null, ptD=null;
-let _dropMarker=null, _boardMarker=null, _walkLine=null, _walkLine2=null;
+let ptO = null, ptD = null;
+let _dropMarker = null, _boardMarker = null, _walkLine = null, _walkLine2 = null;
+
 function clearXferLayers() {{
-  [_dropMarker,_boardMarker,_walkLine,_walkLine2].forEach(l=>{{if(l)map.removeLayer(l);}});
-  _dropMarker=_boardMarker=_walkLine=_walkLine2=null;
+  [_dropMarker, _boardMarker, _walkLine, _walkLine2].forEach(l => {{
+    if (l) map.removeLayer(l);
+  }});
+  _dropMarker = _boardMarker = _walkLine = _walkLine2 = null;
 }}
 
 function compute() {{
   clearXferLayers();
-  if(!ptO||!ptD) {{ hideResult(); return; }}
+  if (!ptO || !ptD) {{
+    hideResult();
+    return;
+  }}
 
-  const atO=nearbyRoutes(ptO.lat,ptO.lon,MAX_WALK);
-  const atD=nearbyRoutes(ptD.lat,ptD.lon,MAX_WALK);
+  const atO = nearbyRoutes(ptO.lat, ptO.lon, MAX_WALK);
+  const atD = nearbyRoutes(ptD.lat, ptD.lon, MAX_WALK);
 
-  if(!atO.length) {{ showErr('شوێنی دەستپێک لە هیچ هێڵێکی بەس نزیک نییە'); return; }}
-  if(!atD.length) {{ showErr('شوێنی مەودا لە هیچ هێڵێکی بەس نزیک نییە'); return; }}
+  if (!atO.length) {{
+    showErr('شوێنی دەستپێک لە هیچ هێڵێکی بەس نزیک نییە');
+    return;
+  }}
+  if (!atD.length) {{
+    showErr('شوێنی مەودا لە هیچ هێڵێکی بەس نزیک نییە');
+    return;
+  }}
 
-  const namesAtD = new Set(atD.map(r=>r.name));
+  const namesAtD = new Set(atD.map(r => r.name));
 
-  // CASE 1: Direct
-  const directs = atO.filter(r=>namesAtD.has(r.name));
-  if(directs.length>0) {{
-    let best=null, bestTotal=Infinity;
-    for(const r of directs) {{
-      const wD=atD.find(x=>x.name===r.name).km;
-      if(r.km+wD<bestTotal){{bestTotal=r.km+wD; best=r;}}
+  // CASE 1: one bus
+  const directs = atO.filter(r => namesAtD.has(r.name));
+  if (directs.length > 0) {{
+    let best = null, bestTotal = Infinity;
+    for (const r of directs) {{
+      const wD = atD.find(x => x.name === r.name).km;
+      if (r.km + wD < bestTotal) {{
+        bestTotal = r.km + wD;
+        best = r;
+      }}
     }}
-    const walkD=atD.find(r=>r.name===best.name).km;
-    const alts=directs.filter(r=>r.name!==best.name);
-    const dropPt=nearestOnRoute(ptD.lat,ptD.lon,best.name).pt;
-    _dropMarker=pulseMarker(best.boardPt.lat,best.boardPt.lon,'#22c55e','شوێنی سواربوون');
-    _boardMarker=pulseMarker(dropPt.lat,dropPt.lon,'#22c55e','شوێنی دابەزین');
-    drawRoutes(new Set(directs.map(r=>r.name)));
+    const walkD = atD.find(r => r.name === best.name).km;
+    const alts = directs.filter(r => r.name !== best.name);
+    const dropPt = nearestOnRoute(ptD.lat, ptD.lon, best.name).pt;
+
+    _dropMarker = pulseMarker(best.boardPt.lat, best.boardPt.lon, '#22c55e', 'شوێنی سواربوون');
+    _boardMarker = pulseMarker(dropPt.lat, dropPt.lon, '#22c55e', 'شوێنی دابەزین');
+    drawRoutes(new Set(directs.map(r => r.name)));
+
     showDirect({{
-      lineO:best.name,
-      labelO:best.name.replace(/_/g,' '),
-      walkO_m:Math.round(best.km*1000),
-      walkD_m:Math.round(walkD*1000),
-      boardPt:best.boardPt,
+      lineO: best.name,
+      labelO: best.name.replace(/_/g, ' '),
+      walkO_m: Math.round(best.km * 1000),
+      walkD_m: Math.round(walkD * 1000),
+      boardPt: best.boardPt,
       dropPt,
       alts
     }});
     return;
   }}
 
-  // CASE 2: 1 transfer
-  let bestT=null, bestScore=Infinity;
-  for(const rO of atO) for(const rD of atD) {{
-    const app=APPROACH[rO.name]&&APPROACH[rO.name][rD.name];
-    if(!app||app.gapKm>XFER_MAX_KM) continue;
-    const score=rO.km+app.gapKm+rD.km;
-    if(score<bestScore){{bestScore=score; bestT={{rO,rD,app}};}}
+  // CASE 2: two buses with nearby transfer
+  let bestT = null, bestScore = Infinity;
+  for (const rO of atO) {{
+    for (const rD of atD) {{
+      const app = APPROACH[rO.name] && APPROACH[rO.name][rD.name];
+      if (!app || app.gapKm > XFER_MAX_KM) continue;
+      const score = rO.km + app.gapKm + rD.km;
+      if (score < bestScore) {{
+        bestScore = score;
+        bestT = {{rO, rD, app}};
+      }}
+    }}
   }}
-  if(bestT) {{
-    const {{rO,rD,app}}=bestT;
-    const sameRoad=app.gapKm<=XFER_SAME;
-    drawRoutes(new Set([rO.name,rD.name]));
-    _dropMarker=pulseMarker(app.ptA.lat,app.ptA.lon,'#fbbf24','لەوێ دابەزە');
-    _boardMarker=pulseMarker(app.ptB.lat,app.ptB.lon,'#60a5fa','لەوێ سوار ببە');
-    if(!sameRoad && app.gapKm>0.01)
-      _walkLine=L.polyline([[app.ptA.lat,app.ptA.lon],[app.ptB.lat,app.ptB.lon]],
-        {{color:'#fbbf24',weight:2,dashArray:'6 5',opacity:0.8}}).addTo(map);
+
+  if (bestT) {{
+    const {{rO, rD, app}} = bestT;
+    const sameRoad = app.gapKm <= XFER_SAME;
+    drawRoutes(new Set([rO.name, rD.name]));
+    _dropMarker = pulseMarker(app.ptA.lat, app.ptA.lon, '#fbbf24', 'لەوێ دابەزە');
+    _boardMarker = pulseMarker(app.ptB.lat, app.ptB.lon, '#60a5fa', 'لەوێ سوار ببە');
+    if (!sameRoad && app.gapKm > 0.01) {{
+      _walkLine = L.polyline(
+        [[app.ptA.lat, app.ptA.lon], [app.ptB.lat, app.ptB.lon]],
+        {{color:'#fbbf24', weight:2, dashArray:'6 5', opacity:0.8}}
+      ).addTo(map);
+    }}
     showTransfer({{
-      lineO:rO.name,
-      labelO:rO.name.replace(/_/g,' '),
-      lineD:rD.name,
-      labelD:rD.name.replace(/_/g,' '),
-      walkO_m:Math.round(rO.km*1000),
-      walkD_m:Math.round(rD.km*1000),
-      xferWalk_m:Math.round(app.gapKm*1000),
+      lineO: rO.name,
+      labelO: rO.name.replace(/_/g, ' '),
+      lineD: rD.name,
+      labelD: rD.name.replace(/_/g, ' '),
+      walkO_m: Math.round(rO.km * 1000),
+      walkD_m: Math.round(rD.km * 1000),
+      xferWalk_m: Math.round(app.gapKm * 1000),
       sameRoad,
-      dropPt:app.ptA,
-      boardPt:app.ptB,
-      viaBazaar:false
+      dropPt: app.ptA,
+      boardPt: app.ptB,
+      viaBazaar: false
     }});
     return;
   }}
 
-  // CASE 3: Via Bazaar hub
-  const allEnds=[];
-  for(const name of ROUTE_NAMES) {{
-    const pts=ROUTE_PTS[name]; if(!pts.length) continue;
-    allEnds.push({{pt:pts[0]}}); allEnds.push({{pt:pts[pts.length-1]}});
+  // CASE 3: two buses via bazaar hub
+  const allEnds = [];
+  for (const name of ROUTE_NAMES) {{
+    const pts = ROUTE_PTS[name];
+    if (!pts.length) continue;
+    allEnds.push({{pt: pts[0]}});
+    allEnds.push({{pt: pts[pts.length - 1]}});
   }}
-  const centLat=allEnds.reduce((s,e)=>s+e.pt.lat,0)/allEnds.length;
-  const centLon=allEnds.reduce((s,e)=>s+e.pt.lon,0)/allEnds.length;
+
+  const centLat = allEnds.reduce((s, e) => s + e.pt.lat, 0) / allEnds.length;
+  const centLon = allEnds.reduce((s, e) => s + e.pt.lon, 0) / allEnds.length;
+
   function bazaarPt(name) {{
-    const pts=ROUTE_PTS[name]; if(!pts.length) return null;
-    const f=pts[0],l=pts[pts.length-1];
-    return hav(f.lat,f.lon,centLat,centLon)<hav(l.lat,l.lon,centLat,centLon)?f:l;
+    const pts = ROUTE_PTS[name];
+    if (!pts.length) return null;
+    const f = pts[0], l = pts[pts.length - 1];
+    return hav(f.lat, f.lon, centLat, centLon) < hav(l.lat, l.lon, centLat, centLon) ? f : l;
   }}
-  let bestB=null, bestBScore=Infinity;
-  for(const rO of atO) {{
-    const bzA=bazaarPt(rO.name); if(!bzA) continue;
-    for(const rD of atD) {{
-      if(rD.name===rO.name) continue;
-      const bzB=bazaarPt(rD.name); if(!bzB) continue;
-      const bw=hav(bzA.lat,bzA.lon,bzB.lat,bzB.lon);
-      const score=rO.km+bw+rD.km;
-      if(score<bestBScore){{bestBScore=score; bestB={{rO,rD,bzA,bzB,bazaarWalk:bw}};}}
+
+  let bestB = null, bestBScore = Infinity;
+  for (const rO of atO) {{
+    const bzA = bazaarPt(rO.name);
+    if (!bzA) continue;
+    for (const rD of atD) {{
+      if (rD.name === rO.name) continue;
+      const bzB = bazaarPt(rD.name);
+      if (!bzB) continue;
+      const bw = hav(bzA.lat, bzA.lon, bzB.lat, bzB.lon);
+      const score = rO.km + bw + rD.km;
+      if (score < bestBScore) {{
+        bestBScore = score;
+        bestB = {{rO, rD, bzA, bzB, bazaarWalk: bw}};
+      }}
     }}
   }}
-  if(bestB) {{
-    const {{rO,rD,bzA,bzB,bazaarWalk}}=bestB;
-    drawRoutes(new Set([rO.name,rD.name]));
-    _dropMarker=pulseMarker(rO.boardPt.lat,rO.boardPt.lon,'#22c55e','شوێنی سواربوونی یەکەم');
-    _boardMarker=pulseMarker(bzA.lat,bzA.lon,'#fbbf24','لەوێ دابەزە');
-    _walkLine=pulseMarker(bzB.lat,bzB.lon,'#60a5fa','لەوێ سوار ببە');
-    if(bazaarWalk>0.01)
-      _walkLine2=L.polyline([[bzA.lat,bzA.lon],[bzB.lat,bzB.lon]],
-        {{color:'#fbbf24',weight:2,dashArray:'6 5',opacity:0.8}}).addTo(map);
+
+  if (bestB) {{
+    const {{rO, rD, bzA, bzB, bazaarWalk}} = bestB;
+    drawRoutes(new Set([rO.name, rD.name]));
+    _dropMarker = pulseMarker(rO.boardPt.lat, rO.boardPt.lon, '#22c55e', 'شوێنی سواربوونی یەکەم');
+    _boardMarker = pulseMarker(bzA.lat, bzA.lon, '#fbbf24', 'لەوێ دابەزە');
+    _walkLine = pulseMarker(bzB.lat, bzB.lon, '#60a5fa', 'لەوێ سوار ببە');
+    if (bazaarWalk > 0.01) {{
+      _walkLine2 = L.polyline(
+        [[bzA.lat, bzA.lon], [bzB.lat, bzB.lon]],
+        {{color:'#fbbf24', weight:2, dashArray:'6 5', opacity:0.8}}
+      ).addTo(map);
+    }}
     showTransfer({{
-      lineO:rO.name,
-      labelO:rO.name.replace(/_/g,' '),
-      lineD:rD.name,
-      labelD:rD.name.replace(/_/g,' '),
-      walkO_m:Math.round(rO.km*1000),
-      walkD_m:Math.round(rD.km*1000),
-      xferWalk_m:Math.round(bazaarWalk*1000),
-      sameRoad:bazaarWalk<=XFER_SAME,
-      dropPt:bzA,
-      boardPt:bzB,
-      viaBazaar:true
+      lineO: rO.name,
+      labelO: rO.name.replace(/_/g, ' '),
+      lineD: rD.name,
+      labelD: rD.name.replace(/_/g, ' '),
+      walkO_m: Math.round(rO.km * 1000),
+      walkD_m: Math.round(rD.km * 1000),
+      xferWalk_m: Math.round(bazaarWalk * 1000),
+      sameRoad: bazaarWalk <= XFER_SAME,
+      dropPt: bzA,
+      boardPt: bzB,
+      viaBazaar: true
     }});
     return;
   }}
@@ -601,23 +689,26 @@ function pulseMarker(lat, lon, color, tip) {{
     html:`<div style="width:18px;height:18px;border-radius:50%;background:${{color}};border:3px solid #fff;box-shadow:0 0 0 0 ${{color}}88;animation:ripple 1.4s infinite;"></div>`,
     iconSize:[18,18], iconAnchor:[9,9], className:''
   }});
-  return L.marker([lat,lon],{{icon,zIndexOffset:900}})
-    .bindTooltip(tip,{{permanent:false,direction:'top'}}).addTo(map);
+  return L.marker([lat,lon], {{icon, zIndexOffset:900}})
+    .bindTooltip(tip, {{permanent:false, direction:'top'}}).addTo(map);
 }}
-if(!document.getElementById('ripple-style')) {{
-  const s=document.createElement('style'); s.id='ripple-style';
-  s.textContent='@keyframes ripple{{0%{{box-shadow:0 0 0 0 rgba(255,255,255,.6);}}70%{{box-shadow:0 0 0 10px rgba(255,255,255,0);}}100%{{box-shadow:0 0 0 0 rgba(255,255,255,0);}}}}';
+
+if (!document.getElementById('ripple-style')) {{
+  const s = document.createElement('style');
+  s.id = 'ripple-style';
+  s.textContent = '@keyframes ripple{{0%{{box-shadow:0 0 0 0 rgba(255,255,255,.6);}}70%{{box-shadow:0 0 0 10px rgba(255,255,255,0);}}100%{{box-shadow:0 0 0 0 rgba(255,255,255,0);}}}}';
   document.head.appendChild(s);
 }}
 
 // Result renderers
 function legRow(chips, label, detail) {{
   const chipHtml = chips.map(c => {{
-    if(c.type==='walk') return `<span class="leg-chip walk">${{c.label}}</span>`;
-    if(c.type==='bus')  return `<span class="leg-chip bus" style="background:${{c.color}}22;border-color:${{c.color}}66;color:${{c.color}}">${{c.label}}</span>`;
-    if(c.type==='xfer') return `<span class="leg-chip xfer">گۆڕین</span>`;
+    if (c.type === 'walk') return `<span class="leg-chip walk">${{c.label}}</span>`;
+    if (c.type === 'bus')  return `<span class="leg-chip bus" style="background:${{c.color}}22;border-color:${{c.color}}66;color:${{c.color}}">${{c.label}}</span>`;
+    if (c.type === 'xfer') return `<span class="leg-chip xfer">گۆڕین</span>`;
     return '';
   }}).join('<span class="leg-arr">•</span>');
+
   return `<div class="leg" onclick="this.classList.toggle('open')">
     <div class="leg-top">
       <div class="leg-chips">${{chipHtml}}</div>
@@ -629,20 +720,20 @@ function legRow(chips, label, detail) {{
 }}
 
 function showDirect(r) {{
-  const c = COLORS[r.lineO]||'#888';
+  const c = COLORS[r.lineO] || '#888';
   const altsHtml = r.alts.length
-    ? ' · ' + r.alts.map(a=>`<span style="color:${{COLORS[a.name]||'#888'}}">${{a.name.replace(/_/g,' ')}}</span>`).join(' / ')
+    ? ' · ' + r.alts.map(a => `<span style="color:${{COLORS[a.name] || '#888'}}">${{a.name.replace(/_/g,' ')}}</span>`).join(' / ')
     : '';
 
   document.getElementById('result-inner').innerHTML =
     `<div class="summary ok">پێویستت بە یەک بەسە</div><div class="legs">` +
-    legRow([{{type:'walk',label:r.walkO_m+' م'}}],
+    legRow([{{type:'walk', label:r.walkO_m+' م'}}],
       `پێویستە <strong>${{r.walkO_m}} م</strong> پیاسە بکەیت بۆ سواربوون لە هێڵی <strong style="color:${{c}}">${{r.labelO}}</strong>${{altsHtml}}`,
       `شوێنی سواربوون لەسەر نەخشە دیار کراوە`) +
-    legRow([{{type:'bus',label:r.labelO,color:c}}],
+    legRow([{{type:'bus', label:r.labelO, color:c}}],
       `سوار ببە و بەردەوام بە تا دەگەیتە ئەو خاڵەی لەسەر نەخشە دیار کراوە`,
       `لەوێ دابەزە`) +
-    legRow([{{type:'walk',label:r.walkD_m+' م'}}],
+    legRow([{{type:'walk', label:r.walkD_m+' م'}}],
       `دوای دابەزین پێویستە <strong>${{r.walkD_m}} م</strong> پیاسە بکەیت`,
       `گەیشتیت بە مەوداکەت`) +
     `</div>`;
@@ -650,28 +741,27 @@ function showDirect(r) {{
 }}
 
 function showTransfer(r) {{
-  const cO=COLORS[r.lineO]||'#888', cD=COLORS[r.lineD]||'#888';
+  const cO = COLORS[r.lineO] || '#888';
+  const cD = COLORS[r.lineD] || '#888';
   const xferText = r.sameRoad
     ? `لە هەمان شوێن دەتوانیت بەسی دووەم بگریت`
     : `دوای دابەزین پێویستە <strong>${{r.xferWalk_m}} م</strong> پیاسە بکەیت بۆ بەسی دووەم`;
 
-  const header = `پێویستت بە دوو بەسە`;
-
   document.getElementById('result-inner').innerHTML =
-    `<div class="summary xfr">${{header}}</div><div class="legs">` +
-    legRow([{{type:'walk',label:r.walkO_m+' م'}}],
+    `<div class="summary xfr">پێویستت بە دوو بەسە</div><div class="legs">` +
+    legRow([{{type:'walk', label:r.walkO_m+' م'}}],
       `پێویستە <strong>${{r.walkO_m}} م</strong> پیاسە بکەیت بۆ سواربوون لە <strong style="color:${{cO}}">${{r.labelO}}</strong>`,
       `شوێنی سواربوونی یەکەم لەسەر نەخشە دیار کراوە`) +
-    legRow([{{type:'bus',label:r.labelO,color:cO}}],
+    legRow([{{type:'bus', label:r.labelO, color:cO}}],
       `سوار ببە و بەردەوام بە تا دەگەیتە خاڵی دابەزین`,
       `لەو خاڵە دابەزە`) +
-    legRow([{{type:'xfer'}},{{type:'walk',label:r.xferWalk_m+' م'}}],
+    legRow([{{type:'xfer'}}, {{type:'walk', label:r.xferWalk_m+' م'}}],
       xferText,
       `شوێنی سواربوونی بەسی دووەم لەسەر نەخشە دیار کراوە`) +
-    legRow([{{type:'bus',label:r.labelD,color:cD}}],
+    legRow([{{type:'bus', label:r.labelD, color:cD}}],
       `پاشان سوار ببە لە <strong style="color:${{cD}}">${{r.labelD}}</strong> و بەردەوام بە بۆ نزیکترین خاڵی مەودا`,
       `لەو شوێنە دابەزە`) +
-    legRow([{{type:'walk',label:r.walkD_m+' م'}}],
+    legRow([{{type:'walk', label:r.walkD_m+' م'}}],
       `لە کۆتاییدا پێویستە <strong>${{r.walkD_m}} م</strong> پیاسە بکەیت`,
       `گەیشتیت بە مەوداکەت`) +
     `</div>`;
@@ -679,7 +769,7 @@ function showTransfer(r) {{
 }}
 
 function showErr(msg) {{
-  document.getElementById('result-inner').innerHTML=`<div class="summary err">${{msg}}</div>`;
+  document.getElementById('result-inner').innerHTML = `<div class="summary err">${{msg}}</div>`;
   showCard();
 }}
 
@@ -688,12 +778,14 @@ let _resultMode = 'float';
 function showCard() {{
   const rc  = document.getElementById('result-card');
   const btn = document.getElementById('result-toggle');
-  rc.classList.remove('bottom'); rc.classList.add('float');
+  rc.classList.remove('bottom');
+  rc.classList.add('float');
   _resultMode = 'float';
   btn.textContent = 'خوارەوە';
   rc.classList.add('show');
   btn.style.display = 'flex';
 }}
+
 function hideResult() {{
   clearXferLayers();
   const rc = document.getElementById('result-card');
@@ -701,39 +793,43 @@ function hideResult() {{
   document.getElementById('result-toggle').style.display = 'none';
   drawRoutes(null);
 }}
+
 function cycleResultMode() {{
   const rc  = document.getElementById('result-card');
   const btn = document.getElementById('result-toggle');
   rc.classList.remove(_resultMode);
-  _resultMode = (_resultMode==='float') ? 'bottom' : 'float';
+  _resultMode = (_resultMode === 'float') ? 'bottom' : 'float';
   rc.classList.add(_resultMode);
   rc.classList.add('show');
-  btn.textContent = _resultMode==='float' ? 'خوارەوە' : 'سەرەوە';
+  btn.textContent = _resultMode === 'float' ? 'خوارەوە' : 'سەرەوە';
 }}
 
 // Map click picking
 let mode = '';
 function toggleMode(m) {{
-  mode = (mode===m) ? '' : m;
-  document.getElementById('btn-o').classList.toggle('on', mode==='origin');
-  document.getElementById('btn-d').classList.toggle('on', mode==='dest');
-  map.getContainer().classList.toggle('picking', mode!=='');
+  mode = (mode === m) ? '' : m;
+  document.getElementById('btn-o').classList.toggle('on', mode === 'origin');
+  document.getElementById('btn-d').classList.toggle('on', mode === 'dest');
+  map.getContainer().classList.toggle('picking', mode !== '');
 }}
 
 map.on('click', e => {{
-  if(!mode) return;
-  const lat=e.latlng.lat, lon=e.latlng.lng;
-  const fmt=lat.toFixed(6)+', '+lon.toFixed(6);
-  if(mode==='origin') {{
-    ptO={{lat,lon}}; placeO(lat,lon);
-    document.getElementById('inp-o').value=fmt;
-    mode='dest';
+  if (!mode) return;
+  const lat = e.latlng.lat, lon = e.latlng.lng;
+  const fmt = lat.toFixed(6) + ', ' + lon.toFixed(6);
+
+  if (mode === 'origin') {{
+    ptO = {{lat, lon}};
+    placeO(lat, lon);
+    document.getElementById('inp-o').value = fmt;
+    mode = 'dest';
     document.getElementById('btn-o').classList.remove('on');
     document.getElementById('btn-d').classList.add('on');
   }} else {{
-    ptD={{lat,lon}}; placeD(lat,lon);
-    document.getElementById('inp-d').value=fmt;
-    mode='';
+    ptD = {{lat, lon}};
+    placeD(lat, lon);
+    document.getElementById('inp-d').value = fmt;
+    mode = '';
     document.getElementById('btn-d').classList.remove('on');
     map.getContainer().classList.remove('picking');
   }}
@@ -742,20 +838,24 @@ map.on('click', e => {{
 
 // Manual coordinate input
 function parseCoord(raw) {{
-  const s=raw.trim().replace(/\s*,\s*/g,',');
-  const parts=s.includes(',')?s.split(','):s.split(/\s+/);
-  if(parts.length<2) return null;
-  const la=parseFloat(parts[0]), lo=parseFloat(parts[1]);
-  return (isNaN(la)||isNaN(lo)) ? null : {{lat:la,lon:lo}};
+  const s = raw.trim().replace(/\\s*,\\s*/g, ',');
+  const parts = s.includes(',') ? s.split(',') : s.split(/\\s+/);
+  if (parts.length < 2) return null;
+  const la = parseFloat(parts[0]), lo = parseFloat(parts[1]);
+  return (isNaN(la) || isNaN(lo)) ? null : {{lat: la, lon: lo}};
 }}
+
 function onCoordInput(which, val) {{
-  const c=parseCoord(val); if(!c) return;
-  if(which==='origin') {{
-    ptO=c; placeO(c.lat,c.lon);
-    map.setView([c.lat,c.lon], map.getZoom()<14?14:map.getZoom());
+  const c = parseCoord(val);
+  if (!c) return;
+  if (which === 'origin') {{
+    ptO = c;
+    placeO(c.lat, c.lon);
+    map.setView([c.lat, c.lon], map.getZoom() < 14 ? 14 : map.getZoom());
   }} else {{
-    ptD=c; placeD(c.lat,c.lon);
-    map.setView([c.lat,c.lon], map.getZoom()<14?14:map.getZoom());
+    ptD = c;
+    placeD(c.lat, c.lon);
+    map.setView([c.lat, c.lon], map.getZoom() < 14 ? 14 : map.getZoom());
   }}
   compute();
 }}
@@ -763,21 +863,32 @@ function onCoordInput(which, val) {{
 // Clear/reset
 let _gpsCircle = null;
 function clearPt(which) {{
-  if(which==='origin') {{
-    ptO=null;
-    if(mO){{map.removeLayer(mO); mO=null;}}
-    if(_gpsCircle){{map.removeLayer(_gpsCircle); _gpsCircle=null;}}
-    document.getElementById('inp-o').value='';
+  if (which === 'origin') {{
+    ptO = null;
+    if (mO) {{
+      map.removeLayer(mO);
+      mO = null;
+    }}
+    if (_gpsCircle) {{
+      map.removeLayer(_gpsCircle);
+      _gpsCircle = null;
+    }}
+    document.getElementById('inp-o').value = '';
   }} else {{
-    ptD=null;
-    if(mD){{map.removeLayer(mD); mD=null;}}
-    document.getElementById('inp-d').value='';
+    ptD = null;
+    if (mD) {{
+      map.removeLayer(mD);
+      mD = null;
+    }}
+    document.getElementById('inp-d').value = '';
   }}
   hideResult();
 }}
+
 function resetAll() {{
-  clearPt('origin'); clearPt('dest');
-  mode='';
+  clearPt('origin');
+  clearPt('dest');
+  mode = '';
   document.getElementById('btn-o').classList.remove('on');
   document.getElementById('btn-d').classList.remove('on');
   map.getContainer().classList.remove('picking');
@@ -786,24 +897,29 @@ function resetAll() {{
 // GPS tracking
 function useMyLocation() {{
   const btn = document.getElementById('recenter-btn');
-  if(!navigator.geolocation) {{
+  if (!navigator.geolocation) {{
     alert('ئەم براوزەرە شوێننیشاندەر پشتگیری ناکات');
     return;
   }}
   btn.classList.add('locating');
   navigator.geolocation.getCurrentPosition(
     pos => {{
-      const lat=pos.coords.latitude, lon=pos.coords.longitude;
-      ptO={{lat,lon}}; placeO(lat,lon);
-      document.getElementById('inp-o').value=lat.toFixed(6)+', '+lon.toFixed(6);
-      map.setView([lat,lon], 16);
-      if(_gpsCircle) map.removeLayer(_gpsCircle);
-      _gpsCircle=L.circle([lat,lon],{{
-        radius:pos.coords.accuracy, color:'#00E5FF', fillColor:'#00E5FF',
-        fillOpacity:0.08, weight:1.5, dashArray:'4 4'
+      const lat = pos.coords.latitude, lon = pos.coords.longitude;
+      ptO = {{lat, lon}};
+      placeO(lat, lon);
+      document.getElementById('inp-o').value = lat.toFixed(6) + ', ' + lon.toFixed(6);
+      map.setView([lat, lon], 16);
+      if (_gpsCircle) map.removeLayer(_gpsCircle);
+      _gpsCircle = L.circle([lat, lon], {{
+        radius: pos.coords.accuracy,
+        color: '#00E5FF',
+        fillColor: '#00E5FF',
+        fillOpacity: 0.08,
+        weight: 1.5,
+        dashArray: '4 4'
       }}).addTo(map);
       btn.classList.remove('locating');
-      mode='dest';
+      mode = 'dest';
       document.getElementById('btn-o').classList.remove('on');
       document.getElementById('btn-d').classList.add('on');
       compute();
@@ -823,7 +939,7 @@ function goDefaultView() {{
 
 // Resize
 function resize() {{
-  window.parent.postMessage({{type:'resize_map', height:window.innerHeight||900}},'*');
+  window.parent.postMessage({{type:'resize_map', height:window.innerHeight || 900}}, '*');
 }}
 resize();
 window.addEventListener('resize', resize);
@@ -831,19 +947,22 @@ window.addEventListener('resize', resize);
 </body>
 </html>"""
 
-
 def main():
     try:
         routes_geojson = load_routes(ROUTES_FILE)
     except Exception as e:
-        st.error(f"Failed to load route file: {e}"); return
+        st.error(f"Failed to load route file: {e}")
+        return
 
     live_buses = fetch_live_buses()
-    supa_url = st.secrets.get("SUPABASE_URL", "")      if hasattr(st, "secrets") else ""
+    supa_url = st.secrets.get("SUPABASE_URL", "") if hasattr(st, "secrets") else ""
     supa_key = st.secrets.get("SUPABASE_ANON_KEY", "") if hasattr(st, "secrets") else ""
 
-    components.html(build_map_html(routes_geojson, live_buses, supa_url, supa_key),
-                    height=900, scrolling=False)
+    components.html(
+        build_map_html(routes_geojson, live_buses, supa_url, supa_key),
+        height=900,
+        scrolling=False
+    )
 
     components.html("""<script>
     window.addEventListener('message', function(e) {
@@ -857,7 +976,6 @@ def main():
         });
     });
     </script>""", height=0)
-
 
 if __name__ == "__main__":
     main()
