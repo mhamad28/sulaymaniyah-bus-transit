@@ -561,4 +561,250 @@ function pulseMarker(lat, lon, color, tip) {{
 if(!document.getElementById('ripple-style')) {{
   const s=document.createElement('style'); s.id='ripple-style';
   s.textContent='@keyframes ripple{{0%{{box-shadow:0 0 0 0 rgba(255,255,255,.6);}}70%{{box-shadow:0 0 0 10px rgba(255,255,255,0);}}100%{{box-shadow:0 0 0 0 rgba(255,255,255,0);}}}}';
-  document.
+  document.head.appendChild(s);
+}}
+
+// ── Result renderers ──
+function legRow(chips, label, detail) {{
+  const chipHtml = chips.map(c => {{
+    if(c.type==='walk') return `<span class="leg-chip walk">🚶 ${{c.label}}</span>`;
+    if(c.type==='bus')  return `<span class="leg-chip bus" style="background:${{c.color}}22;border-color:${{c.color}}66;color:${{c.color}}">${{c.label}}</span>`;
+    if(c.type==='xfer') return `<span class="leg-chip xfer">🔁</span>`;
+    return '';
+  }}).join('<span class="leg-arr">›</span>');
+  return `<div class="leg" onclick="this.classList.toggle('open')">
+    <div class="leg-top">
+      <div class="leg-chips">${{chipHtml}}</div>
+      <div class="leg-label">${{label}}</div>
+      ${{detail ? '<span class="leg-caret">›</span>' : ''}}
+    </div>
+    ${{detail ? `<div class="leg-detail">${{detail}}</div>` : ''}}
+  </div>`;
+}}
+
+function showDirect(r) {{
+  const c = COLORS[r.lineO]||'#888';
+  const altsHtml = r.alts.length
+    ? ' · '+r.alts.map(a=>`<span style="color:${{COLORS[a.name]||'#888'}}">${{a.name.replace(/_/g,' ')}}</span>`).join(' / ')
+    : '';
+  document.getElementById('result-inner').innerHTML =
+    `<div class="summary ok">✅ ڕاستەوخۆ — گۆڕین پێویست نیە</div><div class="legs">` +
+    legRow([{{type:'walk',label:r.walkO_m+'م'}}],
+      `بڕۆ بۆ شەقامی <strong style="color:${{c}}">${{r.labelO}}</strong>`+altsHtml,
+      `پێویستە <strong>${{r.walkO_m}} م</strong> بە پێ بڕۆی — 🟢 خاڵی سەوز لەسەر نەخشەکە`) +
+    legRow([{{type:'bus',label:r.labelO,color:c}}],
+      `دەست ڕاگرە · سەر پاسەکە بکەوە · بڵێ <em>"دابەزین هەیە"</em>`,
+      `شوفێر دەوەستێت ئەگەر ڕێگا هەبێت — 🟢 خاڵی سەوز = شوێنی دابەزین`) +
+    legRow([{{type:'walk',label:r.walkD_m+'م'}}],
+      `پێویستە <strong>${{r.walkD_m}} م</strong> بە پێ بڕۆی — گەیشتیت! 🎉`, null) +
+    `</div>`;
+  showCard();
+}}
+
+function showTransfer(r) {{
+  const cO=COLORS[r.lineO]||'#888', cD=COLORS[r.lineD]||'#888';
+  const xferDetail = r.sameRoad
+    ? `هەمان شەقام — پیاسەکردن پێویست نیە`
+    : `پێویستە <strong>${{r.xferWalk_m}} م</strong> بە پێ بڕۆی — 🟡 زەرد بۆ 🔵 شین لەسەر نەخشەکە`;
+  const dropOffNote = r.viaBazaar
+    ? `پاسەکە لە بازاڕ دەوەستێت بە خۆی — دابەزە`
+    : `بڵێ: <em>"دابەزین هەیە"</em> لە شەقامی ${{r.labelD}} — 🟡 خاڵی زەرد`;
+  const header = r.viaBazaar ? `🔁 یەک گۆڕین — لە ڕێگای بازاڕ` : `🔁 یەک گۆڕین — لە کەنارەی شەقام`;
+  document.getElementById('result-inner').innerHTML =
+    `<div class="summary xfr">${{header}}</div><div class="legs">` +
+    legRow([{{type:'walk',label:r.walkO_m+'م'}}],
+      `بڕۆ بۆ شەقامی <strong style="color:${{cO}}">${{r.labelO}}</strong>`,
+      `پێویستە <strong>${{r.walkO_m}} م</strong> بە پێ بڕۆی — 🟢 خاڵی سەوز`) +
+    legRow([{{type:'bus',label:r.labelO,color:cO}}],
+      `دەست ڕاگرە · سەر پاسەکە بکەوە · ${{dropOffNote}}`,
+      `سەر پاسەکە بکەوە بە تاوەکو خاڵی زەرد`) +
+    legRow([{{type:'xfer'}},{{type:'walk',label:r.xferWalk_m+'م'}}],
+      xferDetail,
+      r.sameRoad ? `هەمان شەقام` : `🟡 دابەزە — 🔵 خاڵی شین = شوێنی سەرکەوتن لە ${{r.labelD}}`) +
+    legRow([{{type:'bus',label:r.labelD,color:cD}}],
+      `دەست ڕاگرە · سەر پاسی <strong style="color:${{cD}}">${{r.labelD}}</strong> بکەوە · بڵێ <em>"دابەزین هەیە"</em>`,
+      `سەر پاسەکە بکەوە بە تاوەکو مەوداکەت`) +
+    legRow([{{type:'walk',label:r.walkD_m+'م'}}],
+      `پێویستە <strong>${{r.walkD_m}} م</strong> بە پێ بڕۆی — گەیشتیت! 🎉`, null) +
+    `</div>`;
+  showCard();
+}}
+
+function showErr(msg) {{
+  document.getElementById('result-inner').innerHTML=`<div class="summary err">⚠️ ${{msg}}</div>`;
+  showCard();
+}}
+
+// ── Result card show/hide/mode ──
+let _resultMode = 'float';
+function showCard() {{
+  const rc  = document.getElementById('result-card');
+  const btn = document.getElementById('result-toggle');
+  rc.classList.remove('bottom'); rc.classList.add('float');
+  _resultMode = 'float';
+  btn.textContent = '▤ خوارەوە';
+  rc.classList.add('show');
+  btn.style.display = 'flex';
+}}
+function hideResult() {{
+  clearXferLayers();
+  const rc = document.getElementById('result-card');
+  rc.classList.remove('show');
+  document.getElementById('result-toggle').style.display = 'none';
+  drawRoutes(null);
+}}
+function cycleResultMode() {{
+  const rc  = document.getElementById('result-card');
+  const btn = document.getElementById('result-toggle');
+  rc.classList.remove(_resultMode);
+  _resultMode = (_resultMode==='float') ? 'bottom' : 'float';
+  rc.classList.add(_resultMode);
+  rc.classList.add('show');
+  btn.textContent = _resultMode==='float' ? '▤ خوارەوە' : '⊟ سەرەوە';
+}}
+
+// ── Map click picking ──
+let mode = '';
+function toggleMode(m) {{
+  mode = (mode===m) ? '' : m;
+  document.getElementById('btn-o').classList.toggle('on', mode==='origin');
+  document.getElementById('btn-d').classList.toggle('on', mode==='dest');
+  map.getContainer().classList.toggle('picking', mode!=='');
+}}
+
+map.on('click', e => {{
+  if(!mode) return;
+  const lat=e.latlng.lat, lon=e.latlng.lng;
+  const fmt=lat.toFixed(6)+', '+lon.toFixed(6);
+  if(mode==='origin') {{
+    ptO={{lat,lon}}; placeO(lat,lon);
+    document.getElementById('inp-o').value=fmt;
+    mode='dest';
+    document.getElementById('btn-o').classList.remove('on');
+    document.getElementById('btn-d').classList.add('on');
+  }} else {{
+    ptD={{lat,lon}}; placeD(lat,lon);
+    document.getElementById('inp-d').value=fmt;
+    mode='';
+    document.getElementById('btn-d').classList.remove('on');
+    map.getContainer().classList.remove('picking');
+  }}
+  compute();
+}});
+
+// ── Manual coordinate input ──
+function parseCoord(raw) {{
+  const s=raw.trim().replace(/\s*,\s*/g,',');
+  const parts=s.includes(',')?s.split(','):s.split(/\s+/);
+  if(parts.length<2) return null;
+  const la=parseFloat(parts[0]), lo=parseFloat(parts[1]);
+  return (isNaN(la)||isNaN(lo)) ? null : {{lat:la,lon:lo}};
+}}
+function onCoordInput(which, val) {{
+  const c=parseCoord(val); if(!c) return;
+  if(which==='origin') {{
+    ptO=c; placeO(c.lat,c.lon);
+    map.setView([c.lat,c.lon], map.getZoom()<14?14:map.getZoom());
+  }} else {{
+    ptD=c; placeD(c.lat,c.lon);
+    map.setView([c.lat,c.lon], map.getZoom()<14?14:map.getZoom());
+  }}
+  compute();
+}}
+
+// ── Clear / reset ──
+let _gpsCircle = null;
+function clearPt(which) {{
+  if(which==='origin') {{
+    ptO=null;
+    if(mO){{map.removeLayer(mO); mO=null;}}
+    if(_gpsCircle){{map.removeLayer(_gpsCircle); _gpsCircle=null;}}
+    document.getElementById('inp-o').value='';
+  }} else {{
+    ptD=null;
+    if(mD){{map.removeLayer(mD); mD=null;}}
+    document.getElementById('inp-d').value='';
+  }}
+  hideResult();
+}}
+function resetAll() {{
+  clearPt('origin'); clearPt('dest');
+  mode='';
+  document.getElementById('btn-o').classList.remove('on');
+  document.getElementById('btn-d').classList.remove('on');
+  map.getContainer().classList.remove('picking');
+}}
+
+// ── GPS Tracking ──
+function useMyLocation() {{
+  const btn = document.getElementById('recenter-btn');
+  if(!navigator.geolocation) {{
+    alert('بەدبەختانە، ئەم براوزەرە شوێننیشاندەر پشتگیری ناکات');
+    return;
+  }}
+  btn.classList.add('locating');
+  navigator.geolocation.getCurrentPosition(
+    pos => {{
+      const lat=pos.coords.latitude, lon=pos.coords.longitude;
+      ptO={{lat,lon}}; placeO(lat,lon);
+      document.getElementById('inp-o').value=lat.toFixed(6)+', '+lon.toFixed(6);
+      map.setView([lat,lon], 16);
+      if(_gpsCircle) map.removeLayer(_gpsCircle);
+      _gpsCircle=L.circle([lat,lon],{{
+        radius:pos.coords.accuracy, color:'#00E5FF', fillColor:'#00E5FF',
+        fillOpacity:0.08, weight:1.5, dashArray:'4 4'
+      }}).addTo(map);
+      btn.classList.remove('locating');
+      mode='dest';
+      document.getElementById('btn-o').classList.remove('on');
+      document.getElementById('btn-d').classList.add('on');
+      compute();
+    }},
+    err => {{
+      btn.classList.remove('locating');
+      alert('هەڵەیەک لە دۆزینەوەی شوێنەکەت ڕوویدا');
+    }},
+    {{enableHighAccuracy:true, timeout:10000, maximumAge:30000}}
+  );
+}}
+
+// ── Resize ──
+function resize() {{
+  window.parent.postMessage({{type:'resize_map', height:window.innerHeight||900}},'*');
+}}
+resize();
+window.addEventListener('resize', resize);
+</script>
+</body>
+</html>"""
+
+
+def main():
+    try:
+        routes_geojson = load_routes(ROUTES_FILE)
+    except Exception as e:
+        st.error(f"Failed to load route file: {e}"); return
+
+    live_buses = fetch_live_buses()
+    supa_url = st.secrets.get("SUPABASE_URL", "")      if hasattr(st, "secrets") else ""
+    supa_key = st.secrets.get("SUPABASE_ANON_KEY", "") if hasattr(st, "secrets") else ""
+
+    components.html(build_map_html(routes_geojson, live_buses, supa_url, supa_key),
+                    height=900, scrolling=False)
+
+    components.html("""<script>
+    window.addEventListener('message', function(e) {
+        if(!e.data || e.data.type !== 'resize_map') return;
+        document.querySelectorAll('iframe').forEach(function(f) {
+            if(parseInt(f.getAttribute('height')||0) > 100) {
+                f.style.height = e.data.height + 'px';
+                f.style.minHeight = e.data.height + 'px';
+                f.setAttribute('height', e.data.height);
+            }
+        });
+    });
+    </script>""", height=0)
+
+
+if __name__ == "__main__":
+    main()
