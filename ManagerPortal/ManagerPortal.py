@@ -1,5 +1,4 @@
-import json
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 import pandas as pd
 import streamlit as st
@@ -33,6 +32,7 @@ def get_fleet_data():
     except Exception:
         return []
 
+
 def get_history_stats(plate):
     try:
         res = (
@@ -46,41 +46,77 @@ def get_history_stats(plate):
     except Exception:
         return []
 
-# =========================================================
-# 3. LOAD DATA FOR UI CONTROLS
-# =========================================================
-fleet = get_fleet_data()
-fleet_bus_ids = sorted({str(b.get("plate_number", "")) for b in fleet if b.get("plate_number") is not None})
 
-# Optional: if you want selector to still show buses even when offline today,
-# you can also pull unique ids from history later. For now it uses live fleet.
-bus_options = ["All buses"] + fleet_bus_ids
+def get_history_bus_ids_for_date(selected_date: date):
+    """
+    Returns all unique bus ids that have history on the chosen date.
+    This is the key fix: bus selector comes from history table,
+    not only from live buses.
+    """
+    try:
+        start_dt = datetime.combine(selected_date, datetime.min.time())
+        end_dt = start_dt + timedelta(days=1)
+
+        res = (
+            supabase.table("bus_location_history")
+            .select("plate_number, recorded_at")
+            .gte("recorded_at", start_dt.isoformat())
+            .lt("recorded_at", end_dt.isoformat())
+            .order("recorded_at", desc=False)
+            .execute()
+        )
+
+        rows = res.data or []
+        bus_ids = sorted({str(r["plate_number"]) for r in rows if r.get("plate_number") is not None})
+        return bus_ids
+    except Exception:
+        return []
+
 
 # =========================================================
-# 4. SIDEBAR CONTROLS
+# 3. SIDEBAR CONTROLS
 # =========================================================
 st.sidebar.header("🕹️ Controls")
 
 show_live = st.sidebar.toggle("Show live buses", value=True)
 show_history = st.sidebar.toggle("Show history lines", value=True)
 
-date_mode = st.sidebar.radio("History date mode", ["Today", "Custom"], index=0)
+date_mode = st.sidebar.radio(
+    "History date",
+    ["Today", "Yesterday", "Custom"],
+    index=0
+)
 
 if date_mode == "Today":
     selected_date = date.today()
+elif date_mode == "Yesterday":
+    selected_date = date.today() - timedelta(days=1)
 else:
     selected_date = st.sidebar.date_input("Choose date", value=date.today())
 
 selected_date_str = selected_date.strftime("%Y-%m-%d")
 
+# IMPORTANT:
+# Bus list comes from history table on selected date,
+# so offline buses also appear.
+history_bus_ids = get_history_bus_ids_for_date(selected_date)
+bus_options = ["All buses"] + history_bus_ids
+
 selected_bus = st.sidebar.selectbox(
-    "Select bus for history",
+    "Select bus for inquiry",
     bus_options,
     index=0
 )
 
-st.sidebar.caption(f"History date: {selected_date_str}")
+st.sidebar.caption(f"Selected date: {selected_date_str}")
 st.sidebar.caption(f"Selected bus: {selected_bus}")
+
+
+# =========================================================
+# 4. PAGE DATA
+# =========================================================
+fleet = get_fleet_data()
+
 
 # =========================================================
 # 5. MAP HTML
@@ -152,7 +188,7 @@ def build_map_html(
                 line-height: 1.5;
                 backdrop-filter: blur(8px);
                 box-shadow: 0 4px 16px rgba(0,0,0,.35);
-                min-width: 200px;
+                min-width: 210px;
             }}
             .map-btn {{
                 position: absolute;
@@ -182,16 +218,17 @@ def build_map_html(
     </head>
     <body>
         <div id="map"></div>
+
         <button id="fit-live-btn" class="map-btn" onclick="fitToLive()">Fit Live</button>
         <button id="fit-history-btn" class="map-btn" onclick="fitToHistory()">Fit History</button>
 
         <div class="map-badge" id="status-badge">Map ready</div>
 
-        <div class="mini-info" id="mini-info">
-            <div><strong>Selected date:</strong> {selected_date_str}</div>
-            <div><strong>Selected bus:</strong> {selected_bus}</div>
-            <div><strong>Live buses:</strong> <span id="live-count">0</span></div>
-            <div><strong>History buses:</strong> <span id="history-count">0</span></div>
+        <div class="mini-info">
+            <div><strong>Date:</strong> {selected_date_str}</div>
+            <div><strong>Bus:</strong> {selected_bus}</div>
+            <div><strong>Live buses shown:</strong> <span id="live-count">0</span></div>
+            <div><strong>History buses shown:</strong> <span id="history-count">0</span></div>
         </div>
 
         <script>
@@ -293,7 +330,11 @@ def build_map_html(
                 const start = dateStr + "T00:00:00";
                 const nextDate = new Date(dateStr + "T00:00:00");
                 nextDate.setDate(nextDate.getDate() + 1);
-                const end = nextDate.toISOString().slice(0, 19);
+
+                const endYear = nextDate.getFullYear();
+                const endMonth = String(nextDate.getMonth() + 1).padStart(2, '0');
+                const endDay = String(nextDate.getDate()).padStart(2, '0');
+                const end = `${{endYear}}-${{endMonth}}-${{endDay}}T00:00:00`;
 
                 const result = await sb
                     .from('bus_location_history')
@@ -320,11 +361,49 @@ def build_map_html(
                 return grouped;
             }}
 
-            function clearAllHistoryLines() {{
+            function clearHistoryLines() {{
                 Object.keys(historyLines).forEach(plate => {{
                     map.removeLayer(historyLines[plate]);
                     delete historyLines[plate];
                 }});
+            }}
+
+            async function renderHistoryLayer() {{
+                clearHistoryLines();
+
+                if (!SHOW_HISTORY) {{
+                    updateCounts();
+                    return;
+                }}
+
+                const grouped = await fetchHistoryByDate(SELECTED_DATE);
+
+                Object.keys(grouped).forEach(plate => {{
+                    const coords = grouped[plate];
+                    if (coords.length < 2) return;
+
+                    const color = colorFromPlate(plate);
+
+                    historyLines[plate] = L.polyline(coords, {{
+                        color: color,
+                        weight: 5,
+                        opacity: 0.6
+                    }})
+                    .addTo(map)
+                    .bindTooltip(
+                        "<b>Bus:</b> " + plate +
+                        "<br><b>Date:</b> " + SELECTED_DATE +
+                        "<br><b>Points:</b> " + coords.length +
+                        "<br><b>Status:</b> History"
+                    );
+                }});
+
+                updateCounts();
+
+                if (!SHOW_LIVE && Object.keys(historyLines).length > 0 && !firstFitDone) {{
+                    fitToHistory();
+                    firstFitDone = true;
+                }}
             }}
 
             async function renderLiveLayer() {{
@@ -383,7 +462,6 @@ def build_map_html(
                     }}
 
                     const coords = await fetchRecentPath(plate);
-
                     if (coords.length > 1) {{
                         if (liveTrails[plate]) {{
                             liveTrails[plate].setLatLngs(coords);
@@ -420,44 +498,6 @@ def build_map_html(
                 updateCounts();
             }}
 
-            async function renderHistoryLayer() {{
-                clearAllHistoryLines();
-
-                if (!SHOW_HISTORY) {{
-                    updateCounts();
-                    return;
-                }}
-
-                const grouped = await fetchHistoryByDate(SELECTED_DATE);
-
-                Object.keys(grouped).forEach(plate => {{
-                    const coords = grouped[plate];
-                    if (coords.length < 2) return;
-
-                    const color = colorFromPlate(plate);
-
-                    historyLines[plate] = L.polyline(coords, {{
-                        color: color,
-                        weight: 5,
-                        opacity: 0.55
-                    }})
-                    .addTo(map)
-                    .bindTooltip(
-                        "<b>Bus:</b> " + plate +
-                        "<br><b>Date:</b> " + SELECTED_DATE +
-                        "<br><b>Points:</b> " + coords.length +
-                        "<br><b>Status:</b> History"
-                    );
-                }});
-
-                updateCounts();
-
-                if (!SHOW_LIVE && Object.keys(historyLines).length > 0 && !firstFitDone) {{
-                    fitToHistory();
-                    firstFitDone = true;
-                }}
-            }}
-
             async function renderAll() {{
                 try {{
                     setBadge('Updating map...', true);
@@ -476,6 +516,7 @@ def build_map_html(
     </body>
     </html>
     """
+
 
 # =========================================================
 # 6. PAGE UI
