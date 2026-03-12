@@ -1,12 +1,3 @@
-"""
-Suly Transit – Driver Portal
-• No auth — driver enters plate number + name + line, press Go
-• Streams GPS to Supabase live_bus_data every ~2 seconds (watchPosition)
-• Also writes every point to bus_location_history
-• Fullscreen Leaflet map shows driver's own trail in real time
-• Stop button ends the session and removes live row
-"""
-
 import json
 import sys
 from pathlib import Path
@@ -61,7 +52,7 @@ def build_html(supa_url, supa_key, line_names, route_colors):
 <html>
 <head>
 <meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Noto+Naskh+Arabic:wght@400;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
@@ -77,6 +68,16 @@ html,body{{width:100%;height:100%;background:#080d14;overflow:hidden;font-family
   border:1px solid rgba(255,255,255,.10);border-radius:16px;
   box-shadow:0 8px 32px rgba(0,0,0,.55);color:#e2eaf4;
 }}
+
+/* RECENTER BUTTON */
+#recenter-btn {{
+  position:absolute; bottom:110px; right:20px; z-index:1001;
+  width:48px; height:48px; border-radius:50%; background:#22c55e;
+  border:2px solid #fff; color:white; font-size:20px; cursor:pointer;
+  display:none; align-items:center; justify-content:center;
+  box-shadow:0 4px 15px rgba(0,0,0,0.4); transition: transform 0.2s;
+}}
+#recenter-btn:active {{ transform: scale(0.9); }}
 
 /* LOGIN */
 #login-screen{{
@@ -160,7 +161,8 @@ html,body{{width:100%;height:100%;background:#080d14;overflow:hidden;font-family
 <body>
 <div id="map"></div>
 
-<!-- LOGIN -->
+<button id="recenter-btn" onclick="recenterMap()">🎯</button>
+
 <div id="login-screen">
   <div id="login-card" class="glass">
     <div class="logo">🚌</div>
@@ -188,7 +190,6 @@ html,body{{width:100%;height:100%;background:#080d14;overflow:hidden;font-family
   </div>
 </div>
 
-<!-- STATUS BAR -->
 <div id="status-bar" class="glass">
   <span class="s-dot green" id="s-dot"></span>
   <div class="s-info">
@@ -198,7 +199,6 @@ html,body{{width:100%;height:100%;background:#080d14;overflow:hidden;font-family
   <button class="stop-btn" onclick="stopSession()">⏹ Stop</button>
 </div>
 
-<!-- STATS -->
 <div id="stats-strip" class="glass">
   <div class="stat"><div class="sv" id="sv-spd">0</div><div class="sl">km/h</div></div>
   <div class="stat"><div class="sv" id="sv-dst">0.0</div><div class="sl">km total</div></div>
@@ -242,190 +242,4 @@ L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',{{attri
 
 // Session state
 let session=null, watchId=null, busMarker=null, trailLine=null;
-let trailPts=[], totalDist=0, lastPt=null, pointCount=0, timerInt=null;
-
-function hav(la1,lo1,la2,lo2) {{
-  const R=6371,r=Math.PI/180;
-  const a=Math.sin((la2-la1)*r/2)**2+Math.cos(la1*r)*Math.cos(la2*r)*Math.sin((lo2-lo1)*r/2)**2;
-  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
-}}
-
-function busIcon(color, plate) {{
-  return L.divIcon({{
-    html:`<div style="background:${{color}};color:#fff;font-size:10px;font-weight:700;
-      padding:4px 9px;border-radius:8px;border:2px solid #fff;
-      box-shadow:0 0 12px ${{color}}99;white-space:nowrap;">${{plate}}</div>`,
-    className:'', iconAnchor:[32,14]
-  }});
-}}
-
-// ── Start ─────────────────────────────────────────────────────────────────────
-function startSession() {{
-  const plate  = document.getElementById('inp-plate').value.trim().toUpperCase();
-  const name   = document.getElementById('inp-name').value.trim();
-  const lineId = document.getElementById('sel-line').value;
-  const color  = COLORS[lineId] || '#00d4ff';
-
-  session = {{plate, name, lineId, color, startTime: Date.now()}};
-
-  document.getElementById('login-screen').style.display = 'none';
-  document.getElementById('status-bar').style.display   = 'flex';
-  document.getElementById('stats-strip').style.display  = 'flex';
-  document.getElementById('s-name').textContent = plate + '  ·  ' + name + '  ·  ' + lineId.replace(/_/g,' ');
-  document.getElementById('s-detail').textContent = 'Acquiring GPS…';
-
-  timerInt = setInterval(tickTimer, 1000);
-
-  if(!navigator.geolocation) {{
-    toast('GPS not supported in this browser'); return;
-  }}
-  watchId = navigator.geolocation.watchPosition(onGPS, onGPSErr,
-    {{enableHighAccuracy:true, timeout:15000, maximumAge:2000}});
-}}
-
-// ── GPS hit ───────────────────────────────────────────────────────────────────
-async function onGPS(pos) {{
-  hideToast();
-  const lat = pos.coords.latitude;
-  const lon = pos.coords.longitude;
-  const spd = pos.coords.speed != null ? +(pos.coords.speed * 3.6).toFixed(1) : 0;
-  const acc = Math.round(pos.coords.accuracy);
-  const now = new Date().toISOString();
-
-  // Trail
-  trailPts.push([lat, lon]);
-  pointCount++;
-  if(lastPt) totalDist += hav(lastPt[0], lastPt[1], lat, lon);
-  lastPt = [lat, lon];
-
-  // Marker
-  if(!busMarker) {{
-    busMarker = L.marker([lat,lon], {{icon:busIcon(session.color, session.plate), zIndexOffset:1000}})
-      .bindTooltip(session.name + ' · ' + session.lineId.replace(/_/g,' ')).addTo(map);
-    map.setView([lat,lon], 15);
-  }} else {{
-    busMarker.setLatLng([lat,lon]);
-    map.panTo([lat,lon], {{animate:true, duration:0.4}});
-  }}
-
-  // Trail polyline
-  if(trailLine) map.removeLayer(trailLine);
-  if(trailPts.length > 1)
-    trailLine = L.polyline(trailPts, {{color:session.color, weight:4, opacity:0.75, lineJoin:'round'}}).addTo(map);
-
-  // UI stats
-  document.getElementById('sv-spd').textContent = Math.round(spd);
-  document.getElementById('sv-dst').textContent = totalDist.toFixed(2);
-  document.getElementById('sv-pts').textContent = pointCount;
-  document.getElementById('s-dot').className = 's-dot green';
-  document.getElementById('s-detail').textContent = `±${{acc}}m  ·  ${{lat.toFixed(5)}}, ${{lon.toFixed(5)}}`;
-
-  if(!sb) return;
-
-  // Upsert live row (matches live_bus_data schema)
-  const {{error: e1}} = await sb.from('live_bus_data').upsert({{
-    plate_number: session.plate,
-    driver_name:  session.name,
-    lat, lon,
-    last_ping:    now,
-    line_id:      session.lineId,
-  }}, {{onConflict: 'plate_number'}});
-  if(e1) console.warn('live_bus_data:', e1.message);
-
-  // Insert history row (matches bus_location_history schema)
-  const {{error: e2}} = await sb.from('bus_location_history').insert({{
-    plate_number: session.plate,
-    lat, lon,
-    recorded_at:  now,
-    line_id:      session.lineId,
-  }});
-  if(e2) console.warn('bus_location_history:', e2.message);
-}}
-
-function onGPSErr(err) {{
-  document.getElementById('s-dot').className = 's-dot yellow';
-  document.getElementById('s-detail').textContent = 'GPS lost — ' + err.message;
-  toast('⚠️ GPS signal lost — retrying…');
-}}
-
-// ── Stop ──────────────────────────────────────────────────────────────────────
-async function stopSession() {{
-  if(watchId !== null) navigator.geolocation.clearWatch(watchId);
-  clearInterval(timerInt);
-
-  if(sb && session) {{
-    const {{error}} = await sb.from('live_bus_data').delete().eq('plate_number', session.plate);
-    if(error) console.warn('delete live row:', error.message);
-  }}
-
-  const dur = Math.round((Date.now() - session.startTime) / 60000);
-  const summary = `✅ Shift ended!\\n\\n` +
-    `🚌 Plate:    ${{session.plate}}\\n` +
-    `👤 Driver:   ${{session.name}}\\n` +
-    `🛣️  Line:     ${{session.lineId.replace(/_/g,' ')}}\\n` +
-    `⏱  Duration: ${{dur}} min\\n` +
-    `📍 Distance: ${{totalDist.toFixed(2)}} km\\n` +
-    `🔵 Points:   ${{pointCount}}`;
-
-  // Reset
-  session=null; watchId=null; pointCount=0; totalDist=0; lastPt=null; trailPts=[];
-  if(busMarker){{map.removeLayer(busMarker);busMarker=null;}}
-  if(trailLine){{map.removeLayer(trailLine);trailLine=null;}}
-
-  document.getElementById('status-bar').style.display   = 'none';
-  document.getElementById('stats-strip').style.display  = 'none';
-  document.getElementById('login-screen').style.display = 'flex';
-  document.getElementById('inp-plate').value = '';
-  document.getElementById('inp-name').value  = '';
-  document.getElementById('sel-line').value  = '';
-  document.getElementById('go-btn').disabled = true;
-
-  alert(summary);
-}}
-
-// ── Timer ─────────────────────────────────────────────────────────────────────
-function tickTimer() {{
-  if(!session) return;
-  const s  = Math.round((Date.now() - session.startTime) / 1000);
-  const mm = String(Math.floor(s/60)).padStart(2,'0');
-  const ss = String(s%60).padStart(2,'0');
-  document.getElementById('sv-dur').textContent = mm+':'+ss;
-}}
-
-// ── Toast ─────────────────────────────────────────────────────────────────────
-let _toastTimer = null;
-function toast(msg) {{
-  const el = document.getElementById('toast');
-  el.textContent = msg; el.style.display = 'block';
-  clearTimeout(_toastTimer);
-  _toastTimer = setTimeout(hideToast, 5000);
-}}
-function hideToast() {{ document.getElementById('toast').style.display='none'; }}
-
-// ── Resize relay ──────────────────────────────────────────────────────────────
-function resize() {{ window.parent.postMessage({{type:'resize_map',height:window.innerHeight||900}},'*'); }}
-resize();
-window.addEventListener('resize', resize);
-</script>
-</body>
-</html>"""
-
-
-def main():
-    components.html(build_html(SUPA_URL, SUPA_KEY, LINE_NAMES, ROUTE_COLORS), height=900, scrolling=False)
-    components.html("""<script>
-    window.addEventListener('message', function(e) {
-        if(!e.data || e.data.type !== 'resize_map') return;
-        document.querySelectorAll('iframe').forEach(function(f) {
-            if(parseInt(f.getAttribute('height')||0) > 100) {
-                f.style.height = e.data.height + 'px';
-                f.style.minHeight = e.data.height + 'px';
-                f.setAttribute('height', e.data.height);
-            }
-        });
-    });
-    </script>""", height=0)
-
-
-if __name__ == "__main__":
-    main()
+let trailPts=[], totalDist=0, lastPt=null, pointCount
