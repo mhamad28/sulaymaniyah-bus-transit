@@ -32,19 +32,6 @@ DEFAULT_ZOOM   = 13
 MAX_WALK_KM    = 0.70
 
 ROUTE_COLORS: Dict[str, str] = {
-    "Bakrajo_Bazar":      "#e41a1c",
-    "Chwarchra_Bazar":    "#377eb8",
-    "FarmanBaran_Bazar":  "#4daf4a",
-    "HawaryShar_Bazar":   "#984ea3",
-    "Kazywa_Bazar":       "#ff7f00",
-    "Kshtukal_Bazar":     "#a65628",
-    "Qrgra_Bazar":        "#f781bf",
-    "Raparin_Bazar":      "#999999",
-    "Rzgary Bazar":       "#66c2a5",
-    "Shakraka_Bazar":     "#fc8d62",
-    "TwiMalik_Bazar":     "#8da0cb",
-    "Xabat_Bazar":        "#ffd92f",
-    "ZargatayTaza_Bazar": "#1b9e77",
 }
 
 @st.cache_data(hash_funcs={Path: lambda p: p.stat().st_mtime if p.exists() else 0})
@@ -305,12 +292,36 @@ const SUPA_KEY = "{supabase_key}";
 const MAX_WALK = {MAX_WALK_KM};
 
 // Map
-const map = L.map('map', {{
-  center: [{DEFAULT_CENTER[0]}, {DEFAULT_CENTER[1]}],
-  zoom: {DEFAULT_ZOOM}, minZoom: 10, maxZoom: 19
-}});
-L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',
-  {{attribution:'© OpenStreetMap', maxZoom:19}}).addTo(map);
+const map = L.map('map', {
+  center: [35.56, 45.43],
+  zoom: 13,
+  minZoom: 10,
+  maxZoom: 19
+});
+
+const streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap',
+  maxZoom: 19
+});
+
+const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+  attribution: 'Tiles © Esri',
+  maxZoom: 19
+});
+
+streetLayer.addTo(map);
+
+L.control.layers(
+  {
+    "Map": streetLayer,
+    "Satellite": satelliteLayer
+  },
+  null,
+  {
+    position: 'topleft',
+    collapsed: true
+  }
+).addTo(map);
 
 // Routes
 let routeLayer = null;
