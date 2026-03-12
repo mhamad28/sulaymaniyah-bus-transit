@@ -69,15 +69,34 @@ html,body{{width:100%;height:100%;background:#080d14;overflow:hidden;font-family
   box-shadow:0 8px 32px rgba(0,0,0,.55);color:#e2eaf4;
 }}
 
-/* RECENTER BUTTON */
-#recenter-btn {{
-  position:absolute; bottom:110px; right:20px; z-index:1001;
-  width:48px; height:48px; border-radius:50%; background:#22c55e;
-  border:2px solid #fff; color:white; font-size:20px; cursor:pointer;
-  display:none; align-items:center; justify-content:center;
-  box-shadow:0 4px 15px rgba(0,0,0,0.4); transition: transform 0.2s;
-}}
-#recenter-btn:active {{ transform: scale(0.9); }}
+/* UPDATED RECENTER BUTTON STYLE */
+#recenter-btn {
+  position: absolute; 
+  bottom: 110px; 
+  right: 20px; 
+  z-index: 1001;
+  width: 50px; 
+  height: 50px; 
+  border-radius: 12px; /* Rounded square look */
+  background: #000000; /* Black background like your image */
+  border: 1px solid rgba(255,255,255,0.2); 
+  cursor: pointer;
+  display: none; 
+  align-items: center; 
+  justify-content: center;
+  box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+  transition: all 0.2s;
+}
+
+/* The Target Icon using SVG for that sharp Cyan look */
+#recenter-btn::before {
+  content: "";
+  width: 28px;
+  height: 28px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2300E5FF' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='3' fill='%2300E5FF'/%3E%3Ccircle cx='12' cy='12' r='7'/%3E%3Cline x1='12' y1='1' x2='12' y2='5'/%3E%3Cline x1='12' y1='19' x2='12' y2='23'/%3E%3Cline x1='1' y1='12' x2='5' y2='12'/%3E%3Cline x1='19' y1='12' x2='23' y2='12'/%3E%3C/svg%3E");
+  background-size: contain;
+  background-repeat: no-repeat;
+}
 
 /* LOGIN */
 #login-screen{{
