@@ -5,3 +5,4 @@ streamlit-folium
 supabase
 geopy
 pydeck
+streamlit-autorefresh
