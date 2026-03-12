@@ -62,15 +62,33 @@ def get_history_rows_for_date(selected_date: date):
         start_dt = datetime.combine(selected_date, datetime.min.time())
         end_dt = start_dt + timedelta(days=1)
 
-        res = (
-            supabase.table("bus_location_history")
-            .select("plate_number, lat, lon, recorded_at, line_id")
-            .gte("recorded_at", start_dt.isoformat())
-            .lt("recorded_at", end_dt.isoformat())
-            .order("recorded_at", desc=False)
-            .execute()
-        )
-        return res.data or []
+        all_rows = []
+        page_size = 1000
+        start_index = 0
+
+        while True:
+            end_index = start_index + page_size - 1
+
+            res = (
+                supabase.table("bus_location_history")
+                .select("plate_number, lat, lon, recorded_at, line_id")
+                .gte("recorded_at", start_dt.isoformat())
+                .lt("recorded_at", end_dt.isoformat())
+                .order("recorded_at", desc=False)
+                .range(start_index, end_index)
+                .execute()
+            )
+
+            rows = res.data or []
+            all_rows.extend(rows)
+
+            if len(rows) < page_size:
+                break
+
+            start_index += page_size
+
+        return all_rows
+
     except Exception:
         return []
 
