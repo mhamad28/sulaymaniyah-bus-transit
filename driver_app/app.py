@@ -49,12 +49,14 @@ def build_html(supa_url, supa_key, line_names, route_colors):
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Noto+Naskh+Arabic:wght@400;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 *{{margin:0;padding:0;box-sizing:border-box;}}
-html,body{{width:100%;height:100%;background:#080d14;overflow:hidden;font-family:sans-serif;}}
+html,body{{width:100%;height:100%;background:#080d14;overflow:hidden;font-family:'Inter',sans-serif;}}
 #map{{width:100%;height:100vh;}}
 
 .glass{{
@@ -63,7 +65,7 @@ html,body{{width:100%;height:100%;background:#080d14;overflow:hidden;font-family
   box-shadow:0 8px 32px rgba(0,0,0,.55);color:#e2eaf4;
 }}
 
-/* RECENTER BUTTON - CUSTOM STYLE */
+/* THE NEW TARGET BUTTON */
 #recenter-btn {{
   position: absolute; 
   bottom: 110px; 
@@ -91,17 +93,53 @@ html,body{{width:100%;height:100%;background:#080d14;overflow:hidden;font-family
 }}
 #recenter-btn:active {{ transform: scale(0.9); }}
 
-/* LOGIN */
-#login-screen{{position:absolute;inset:0;z-index:2000;display:flex;align-items:center;justify-content:center;background:rgba(8,13,20,.96);}}
+/* ORIGINAL LOGIN DESIGN */
+#login-screen{{
+  position:absolute;inset:0;z-index:2000;
+  display:flex;align-items:center;justify-content:center;
+  background:rgba(8,13,20,.96);
+}}
 #login-card{{width:min(380px,90vw);padding:28px 24px;display:flex;flex-direction:column;gap:16px;}}
-.inp, .sel {{width:100%;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.13);border-radius:10px;padding:12px;color:#fff;outline:none;}}
-.go-btn{{width:100%;padding:14px;border-radius:10px;border:none;background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;font-weight:700;cursor:pointer;}}
-#status-bar{{position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:1000;width:92%;padding:10px;display:none;align-items:center;gap:10px;}}
-#stats-strip{{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);z-index:1000;width:92%;padding:10px;display:none;flex-direction:row;}}
-.stat{{flex:1;text-align:center;border-right:1px solid rgba(255,255,255,.1);}}
+.logo{{text-align:center;font-size:32px;}}
+.login-title{{text-align:center;font-size:17px;font-weight:700;color:#e2eaf4;}}
+.login-sub{{text-align:center;font-size:12px;color:#64748b;margin-top:-8px;font-family:'Noto Naskh Arabic',sans-serif;}}
+.lbl{{font-size:11px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;}}
+.inp{{
+  width:100%;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.13);
+  border-radius:10px;padding:11px 14px;font-size:14px;font-family:'Inter',sans-serif;
+  color:#e2eaf4;outline:none;transition:border-color .15s;
+}}
+.inp:focus{{border-color:#00d4ff;}}
+.sel{{
+  width:100%;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.13);
+  border-radius:10px;padding:11px 14px;font-size:13px;
+  color:#e2eaf4;outline:none;cursor:pointer;appearance:none;
+}}
+.sel option{{background:#0f172a;color:#e2eaf4;}}
+.go-btn{{
+  width:100%;padding:13px;border-radius:10px;border:none;
+  background:linear-gradient(135deg,#22c55e,#16a34a);
+  color:#fff;font-size:15px;font-weight:700;cursor:pointer;
+  transition:all .2s;font-family:'Inter',sans-serif;
+}}
+.go-btn:hover{{transform:translateY(-1px);box-shadow:0 4px 20px rgba(34,197,94,.4);}}
+.go-btn:disabled{{background:#1e293b;color:#475569;cursor:not-allowed;transform:none;box-shadow:none;}}
+
+/* ORIGINAL HUD DESIGN */
+#status-bar{{position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:1000;width:min(480px,92vw);padding:10px 16px;display:none;align-items:center;gap:10px;}}
+.s-dot{{width:10px;height:10px;border-radius:50%;flex-shrink:0;}}
+.s-dot.green{{background:#22c55e;animation:blink 1.4s infinite;}}
+@keyframes blink{{0%,100%{{opacity:1;}}50%{{opacity:.3;}}}}
+.s-info{{flex:1;min-width:0;}}
+.s-name{{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}}
+.s-detail{{font-size:11px;color:#64748b;margin-top:1px;}}
+.stop-btn{{flex-shrink:0;padding:6px 14px;border-radius:8px;border:1.5px solid #ef4444;background:rgba(239,68,68,.12);color:#f87171;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s;}}
+#stats-strip{{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);z-index:1000;width:min(480px,92vw);padding:10px 16px;display:none;flex-direction:row;gap:0;}}
+.stat{{flex:1;text-align:center;padding:4px 8px;border-right:1px solid rgba(255,255,255,.08);}}
 .stat:last-child{{border-right:none;}}
-.sv{{font-size:20px;font-weight:700;}}
-.sl{{font-size:10px;color:#64748b;}}
+.sv{{font-size:20px;font-weight:700;color:#e2eaf4;}}
+.sl{{font-size:10px;color:#64748b;margin-top:2px;text-transform:uppercase;letter-spacing:.04em;}}
+#toast{{position:absolute;bottom:90px;left:50%;transform:translateX(-50%);z-index:1001;padding:8px 18px;border-radius:10px;background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.3);color:#f87171;font-size:12px;display:none;white-space:nowrap;}}
 </style>
 </head>
 <body>
@@ -110,107 +148,144 @@ html,body{{width:100%;height:100%;background:#080d14;overflow:hidden;font-family
 
 <div id="login-screen">
   <div id="login-card" class="glass">
-    <h2 style="text-align:center">🚌 Suly Transit</h2>
-    <input class="inp" id="inp-plate" placeholder="Plate Number"/>
-    <input class="inp" id="inp-name" placeholder="Driver Name"/>
-    <select class="sel" id="sel-line"><option value="">Select Line</option></select>
-    <button class="go-btn" id="go-btn" onclick="startSession()">Start Shift</button>
+    <div class="logo">🚌</div>
+    <div class="login-title">Suly Transit — Driver Portal</div>
+    <div class="login-sub">پۆرتاڵی شوفێر</div>
+    <div>
+      <div class="lbl">Plate Number — ژمارەی سەر پلەیت</div>
+      <input class="inp" id="inp-plate" placeholder="e.g. 12 A 3456" autocomplete="off" oninput="checkForm()"/>
+    </div>
+    <div>
+      <div class="lbl">Driver Name — ناوی شوفێر</div>
+      <input class="inp" id="inp-name" placeholder="Your name" autocomplete="off" oninput="checkForm()"/>
+    </div>
+    <div>
+      <div class="lbl">Bus Line — هێڵی پاس</div>
+      <select class="sel" id="sel-line" onchange="checkForm()"><option value="">— Choose your line —</option></select>
+    </div>
+    <button class="go-btn" id="go-btn" onclick="startSession()" disabled>🟢 &nbsp;Start Shift — دەستپێکردنی گەشتەکە</button>
   </div>
 </div>
 
 <div id="status-bar" class="glass">
-  <div style="width:10px;height:10px;background:#22c55e;border-radius:50%"></div>
-  <div id="s-name" style="flex:1;font-size:13px;font-weight:700"></div>
-  <button onclick="stopSession()" style="background:none;border:1px solid red;color:red;padding:4px 8px;border-radius:5px">Stop</button>
+  <span class="s-dot green" id="s-dot"></span>
+  <div class="s-info">
+    <div class="s-name" id="s-name">—</div>
+    <div class="s-detail" id="s-detail">Acquiring GPS…</div>
+  </div>
+  <button class="stop-btn" onclick="stopSession()">⏹ Stop</button>
 </div>
 
 <div id="stats-strip" class="glass">
   <div class="stat"><div class="sv" id="sv-spd">0</div><div class="sl">km/h</div></div>
-  <div class="stat"><div class="sv" id="sv-dst">0.0</div><div class="sl">km</div></div>
-  <div class="stat"><div class="sv" id="sv-pts">0</div><div class="sl">pts</div></div>
-  <div class="stat"><div class="sv" id="sv-dur">00:00</div><div class="sl">min</div></div>
+  <div class="stat"><div class="sv" id="sv-dst">0.0</div><div class="sl">km total</div></div>
+  <div class="stat"><div class="sv" id="sv-pts">0</div><div class="sl">points</div></div>
+  <div class="stat"><div class="sv" id="sv-dur">00:00</div><div class="sl">duration</div></div>
 </div>
+<div id="toast"></div>
 
 <script>
 const SUPA_URL = "{supa_url}";
 const SUPA_KEY = "{supa_key}";
-const COLORS = {colors_json};
 const LINE_NAMES = {lines_json};
+const COLORS = {colors_json};
 
-let sb = supabase.createClient(SUPA_URL, SUPA_KEY);
-let session=null, watchId=null, busMarker=null, trailLine=null;
-let trailPts=[], totalDist=0, lastPt=null, pointCount=0;
+let sb = supabase.createClient(SUPA_URL, SUPA_KEY, {{auth:{{persistSession:false}}}});
+
+const sel = document.getElementById('sel-line');
+LINE_NAMES.forEach(name => {{
+  const o = document.createElement('option');
+  o.value = name;
+  o.textContent = name.replace(/_/g,' ');
+  sel.appendChild(o);
+}});
+
+function checkForm() {{
+  const ok = document.getElementById('inp-plate').value.trim() &&
+             document.getElementById('inp-name').value.trim() &&
+             document.getElementById('sel-line').value;
+  document.getElementById('go-btn').disabled = !ok;
+}}
 
 const map = L.map('map',{{center:[{DEFAULT_CENTER[0]},{DEFAULT_CENTER[1]}],zoom:13}});
 L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png').addTo(map);
 
-const sel = document.getElementById('sel-line');
-LINE_NAMES.forEach(n => {{ let o=document.createElement('option'); o.value=n; o.textContent=n.replace(/_/g,' '); sel.appendChild(o); }});
+let session=null, watchId=null, busMarker=null, trailLine=null;
+let trailPts=[], totalDist=0, lastPt=null, pointCount=0, timerInt=null;
+
+function hav(la1,lo1,la2,lo2) {{
+  const R=6371,r=Math.PI/180;
+  const a=Math.sin((la2-la1)*r/2)**2+Math.cos(la1*r)*Math.cos(la2*r)*Math.sin((lo2-lo1)*r/2)**2;
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}}
+
+function busIcon(color, plate) {{
+  return L.divIcon({{
+    html:`<div style="background:${{color}};color:#fff;font-size:10px;font-weight:700;padding:4px 9px;border-radius:8px;border:2px solid #fff;box-shadow:0 0 12px ${{color}}99;white-space:nowrap;">${{plate}}</div>`,
+    className:'', iconAnchor:[32,14]
+  }});
+}}
 
 function recenterMap() {{
     if(lastPt) map.setView(lastPt, 16);
 }}
 
 function startSession() {{
-    const plate = document.getElementById('inp-plate').value.toUpperCase();
-    const name = document.getElementById('inp-name').value;
-    const lineId = document.getElementById('sel-line').value;
-    if(!plate || !name || !lineId) return;
-
-    session = {{plate, name, lineId, startTime: Date.now()}};
-    document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('status-bar').style.display = 'flex';
-    document.getElementById('stats-strip').style.display = 'flex';
-    document.getElementById('recenter-btn').style.display = 'flex';
-    document.getElementById('s-name').textContent = plate + ' | ' + lineId;
-
-    watchId = navigator.geolocation.watchPosition(onGPS, null, {{enableHighAccuracy:true, timeout:15000, maximumAge:2000}});
-    setInterval(tickTimer, 1000);
+  const plate = document.getElementById('inp-plate').value.trim().toUpperCase();
+  const name = document.getElementById('inp-name').value.trim();
+  const lineId = document.getElementById('sel-line').value;
+  const color = COLORS[lineId] || '#00d4ff';
+  session = {{plate, name, lineId, color, startTime: Date.now()}};
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('status-bar').style.display = 'flex';
+  document.getElementById('stats-strip').style.display = 'flex';
+  document.getElementById('recenter-btn').style.display = 'flex';
+  document.getElementById('s-name').textContent = plate + ' · ' + name;
+  timerInt = setInterval(tickTimer, 1000);
+  watchId = navigator.geolocation.watchPosition(onGPS, null, {{enableHighAccuracy:true}});
 }}
 
 async function onGPS(pos) {{
-    const lat = pos.coords.latitude, lon = pos.coords.longitude;
-    const spd = pos.coords.speed ? pos.coords.speed * 3.6 : 0;
-    const now = new Date().toISOString();
-
-    lastPt = [lat, lon];
-    trailPts.push(lastPt);
-    pointCount++;
-
-    if(!busMarker) {{
-        busMarker = L.marker(lastPt).addTo(map);
-        map.setView(lastPt, 16);
-    }} else {{
-        busMarker.setLatLng(lastPt);
-    }}
-    
-    if(trailLine) map.removeLayer(trailLine);
-    trailLine = L.polyline(trailPts, {{color:'#22c55e', weight:4}}).addTo(map);
-
-    document.getElementById('sv-spd').textContent = Math.round(spd);
-    document.getElementById('sv-pts').textContent = pointCount;
-
-    sb.from('live_bus_data').upsert({{plate_number:session.plate, driver_name:session.name, lat, lon, line_id:session.lineId, last_ping:now}}, {{onConflict:'plate_number'}}).then();
-    sb.from('bus_location_history').insert({{plate_number:session.plate, lat, lon, line_id:session.lineId, recorded_at:now}}).then();
+  const lat = pos.coords.latitude, lon = pos.coords.longitude;
+  const spd = pos.coords.speed != null ? +(pos.coords.speed * 3.6).toFixed(1) : 0;
+  const now = new Date().toISOString();
+  trailPts.push([lat, lon]);
+  pointCount++;
+  if(lastPt) totalDist += hav(lastPt[0], lastPt[1], lat, lon);
+  lastPt = [lat, lon];
+  if(!busMarker) {{
+    busMarker = L.marker([lat,lon], {{icon:busIcon(session.color, session.plate)}}).addTo(map);
+    map.setView([lat,lon], 15);
+  }} else {{
+    busMarker.setLatLng([lat,lon]);
+  }}
+  if(trailLine) map.removeLayer(trailLine);
+  if(trailPts.length > 1) trailLine = L.polyline(trailPts, {{color:session.color, weight:4}}).addTo(map);
+  document.getElementById('sv-spd').textContent = Math.round(spd);
+  document.getElementById('sv-dst').textContent = totalDist.toFixed(2);
+  document.getElementById('sv-pts').textContent = pointCount;
+  sb.from('live_bus_data').upsert({{plate_number:session.plate, driver_name:session.name, lat, lon, last_ping:now, line_id:session.lineId}}, {{onConflict:'plate_number'}}).then();
+  sb.from('bus_location_history').insert({{plate_number:session.plate, lat, lon, recorded_at:now, line_id:session.lineId}}).then();
 }}
 
 function tickTimer() {{
-    if(!session) return;
-    const sec = Math.floor((Date.now() - session.startTime)/1000);
-    document.getElementById('sv-dur').textContent = Math.floor(sec/60).toString().padStart(2,'0') + ':' + (sec%60).toString().padStart(2,'0');
+  if(!session) return;
+  const s = Math.round((Date.now() - session.startTime) / 1000);
+  document.getElementById('sv-dur').textContent = String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
 }}
 
 async function stopSession() {{
-    navigator.geolocation.clearWatch(watchId);
-    if(session) await sb.from('live_bus_data').delete().eq('plate_number', session.plate);
-    location.reload();
+  navigator.geolocation.clearWatch(watchId);
+  clearInterval(timerInt);
+  if(sb && session) await sb.from('live_bus_data').delete().eq('plate_number', session.plate);
+  location.reload();
 }}
 </script>
 </body>
 </html>"""
 
 def main():
-    components.html(build_html(SUPA_URL, SUPA_KEY, LINE_NAMES, ROUTE_COLORS), height=800)
+    components.html(build_html(SUPA_URL, SUPA_KEY, LINE_NAMES, ROUTE_COLORS), height=900, scrolling=False)
 
 if __name__ == "__main__":
     main()
