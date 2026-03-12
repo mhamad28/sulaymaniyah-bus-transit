@@ -1,9 +1,10 @@
-import streamlit as st
-from supabase import create_client, Client
-import pandas as pd
 import json
+from datetime import datetime, date, timedelta
+
+import pandas as pd
+import streamlit as st
 import streamlit.components.v1 as components
-from datetime import datetime
+from supabase import Client, create_client
 
 # =========================================================
 # 1. CONFIG & SUPABASE
@@ -18,9 +19,10 @@ st.markdown("""
 <style>
     header {display: none !important;}
     footer {display: none !important;}
-    .block-container {padding-top: 2rem !important;}
+    .block-container {padding-top: 1.5rem !important;}
 </style>
 """, unsafe_allow_html=True)
+
 
 # =========================================================
 # 2. DATA FUNCTIONS
@@ -29,26 +31,36 @@ def get_fleet_data():
     try:
         res = supabase.table("live_bus_data").select("*").execute()
         return res.data or []
-    except:
+    except Exception:
         return []
+
 
 def get_history_stats(plate):
     try:
-        res = supabase.table("bus_location_history") \
-            .select("recorded_at") \
-            .eq("plate_number", str(plate)) \
-            .order("recorded_at", desc=False) \
+        res = (
+            supabase.table("bus_location_history")
+            .select("recorded_at")
+            .eq("plate_number", str(plate))
+            .order("recorded_at", desc=False)
             .execute()
+        )
         return res.data or []
-    except:
+    except Exception:
         return []
 
+
 # =========================================================
-# 3. LIVE MAP HTML
-# Map updates inside JavaScript itself every 10s
-# so Streamlit does NOT redraw the whole map.
+# 3. MAP HTML
+# Live data updates inside JS every 10 seconds.
+# History lines load for selected date and can also refresh.
 # =========================================================
-def build_map_html(supabase_url, supabase_key):
+def build_map_html(
+    supabase_url: str,
+    supabase_key: str,
+    show_live: bool,
+    show_history: bool,
+    selected_date_str: str,
+) -> str:
     return f"""
     <!DOCTYPE html>
     <html>
@@ -66,7 +78,7 @@ def build_map_html(supabase_url, supabase_key):
                 font-family: system-ui, sans-serif;
             }}
             #map {{
-                height: 560px;
+                height: 620px;
                 width: 100%;
                 border-radius: 16px;
                 border: 2px solid #333;
@@ -75,7 +87,7 @@ def build_map_html(supabase_url, supabase_key):
                 border: none !important;
             }}
             .leaflet-control-zoom a {{
-                background: rgba(15,23,42,.92) !important;
+                background: rgba(15,23,42,.95) !important;
                 color: #e5e7eb !important;
                 border: 1px solid rgba(255,255,255,.10) !important;
             }}
@@ -84,43 +96,75 @@ def build_map_html(supabase_url, supabase_key):
                 top: 12px;
                 right: 12px;
                 z-index: 1000;
-                background: rgba(15,23,42,.92);
+                background: rgba(15,23,42,.95);
                 color: #86efac;
                 border: 1px solid rgba(34,197,94,.35);
                 border-radius: 999px;
                 padding: 6px 12px;
                 font-size: 12px;
-                font-weight: 600;
+                font-weight: 700;
                 backdrop-filter: blur(8px);
                 box-shadow: 0 4px 16px rgba(0,0,0,.35);
+            }}
+            .mini-info {{
+                position: absolute;
+                top: 52px;
+                right: 12px;
+                z-index: 1000;
+                background: rgba(15,23,42,.95);
+                color: #cbd5e1;
+                border: 1px solid rgba(255,255,255,.12);
+                border-radius: 14px;
+                padding: 10px 12px;
+                font-size: 12px;
+                line-height: 1.5;
+                backdrop-filter: blur(8px);
+                box-shadow: 0 4px 16px rgba(0,0,0,.35);
+                min-width: 170px;
             }}
             .map-btn {{
                 position: absolute;
                 z-index: 1000;
-                background: rgba(15,23,42,.92);
+                background: rgba(15,23,42,.95);
                 color: #e5e7eb;
                 border: 1px solid rgba(255,255,255,.12);
                 border-radius: 12px;
                 padding: 8px 12px;
                 font-size: 12px;
-                font-weight: 600;
+                font-weight: 700;
                 cursor: pointer;
                 box-shadow: 0 4px 16px rgba(0,0,0,.35);
             }}
-            #fit-btn {{
+            #fit-live-btn {{
                 top: 12px;
                 left: 56px;
+            }}
+            #fit-history-btn {{
+                top: 56px;
+                left: 56px;
+            }}
+            .leaflet-tooltip {{
+                font-size: 12px;
             }}
         </style>
     </head>
     <body>
         <div id="map"></div>
-        <button id="fit-btn" class="map-btn" onclick="fitToFleet()">Fit Fleet</button>
-        <div class="map-badge" id="status-badge">Live map</div>
+        <button id="fit-live-btn" class="map-btn" onclick="fitToLive()">Fit Live</button>
+        <button id="fit-history-btn" class="map-btn" onclick="fitToHistory()">Fit History</button>
+        <div class="map-badge" id="status-badge">Map ready</div>
+        <div class="mini-info" id="mini-info">
+            <div><strong>Selected date:</strong> {selected_date_str}</div>
+            <div><strong>Live buses:</strong> <span id="live-count">0</span></div>
+            <div><strong>History buses:</strong> <span id="history-count">0</span></div>
+        </div>
 
         <script>
             const SUPA_URL = "{supabase_url}";
             const SUPA_KEY = "{supabase_key}";
+            const SHOW_LIVE = {str(show_live).lower()};
+            const SHOW_HISTORY = {str(show_history).lower()};
+            const SELECTED_DATE = "{selected_date_str}";
             const REFRESH_MS = 10000;
             const DEFAULT_CENTER = [35.56, 45.43];
             const DEFAULT_ZOOM = 12;
@@ -140,44 +184,49 @@ def build_map_html(supabase_url, supabase_key):
                 maxZoom: 19
             }}).addTo(map);
 
-            const busMarkers = {{}};
-            const busTrails = {{}};
+            const liveMarkers = {{}};
+            const liveTrails = {{}};
+            const historyLines = {{}};
+
             let firstFitDone = false;
 
-            function badge(text, ok=true) {{
+            function setBadge(text, ok = true) {{
                 const el = document.getElementById('status-badge');
                 el.textContent = text;
                 el.style.color = ok ? '#86efac' : '#fca5a5';
                 el.style.borderColor = ok ? 'rgba(34,197,94,.35)' : 'rgba(239,68,68,.35)';
             }}
 
-            function busColor(lineId) {{
-                const colors = {{
-                    "Bakrajo_Bazar": "#e41a1c",
-                    "Chwarchra_Bazar": "#377eb8",
-                    "FarmanBaran_Bazar": "#4daf4a",
-                    "HawaryShar_Bazar": "#984ea3",
-                    "Kazywa_Bazar": "#ff7f00",
-                    "Kshtukal_Bazar": "#a65628",
-                    "Qrgra_Bazar": "#f781bf",
-                    "Raparin_Bazar": "#999999",
-                    "Rzgary Bazar": "#66c2a5",
-                    "Shakraka_Bazar": "#fc8d62",
-                    "TwiMalik_Bazar": "#8da0cb",
-                    "Xabat_Bazar": "#ffd92f",
-                    "ZargatayTaza_Bazar": "#1b9e77"
-                }};
-                return colors[lineId] || "#00E5FF";
+            function updateCounts() {{
+                document.getElementById('live-count').textContent = Object.keys(liveMarkers).length;
+                document.getElementById('history-count').textContent = Object.keys(historyLines).length;
             }}
 
-            function fitToFleet() {{
-                const layers = Object.values(busMarkers);
+            function colorFromPlate(plate) {{
+                const s = String(plate);
+                let hash = 0;
+                for (let i = 0; i < s.length; i++) {{
+                    hash = s.charCodeAt(i) + ((hash << 5) - hash);
+                }}
+                const hue = Math.abs(hash) % 360;
+                return `hsl(${{hue}}, 78%, 55%)`;
+            }}
+
+            function fitToLive() {{
+                const layers = Object.values(liveMarkers);
                 if (!layers.length) return;
                 const group = new L.featureGroup(layers);
                 map.fitBounds(group.getBounds().pad(0.2));
             }}
 
-            async function fetchFleet() {{
+            function fitToHistory() {{
+                const layers = Object.values(historyLines);
+                if (!layers.length) return;
+                const group = new L.featureGroup(layers);
+                map.fitBounds(group.getBounds().pad(0.15));
+            }}
+
+            async function fetchLiveFleet() {{
                 const result = await sb
                     .from('live_bus_data')
                     .select('*');
@@ -186,7 +235,7 @@ def build_map_html(supabase_url, supabase_key):
                 return result.data || [];
             }}
 
-            async function fetchBusPath(plate) {{
+            async function fetchRecentPath(plate) {{
                 const result = await sb
                     .from('bus_location_history')
                     .select('lat, lon, recorded_at')
@@ -204,120 +253,223 @@ def build_map_html(supabase_url, supabase_key):
                     .map(r => [r.lat, r.lon]);
             }}
 
-            async function renderMapData() {{
-                try {{
-                    badge('Updating...', true);
+            async function fetchHistoryByDate(dateStr) {{
+                const start = dateStr + "T00:00:00";
+                const nextDate = new Date(dateStr + "T00:00:00");
+                nextDate.setDate(nextDate.getDate() + 1);
+                const end = nextDate.toISOString().slice(0, 19);
 
-                    const fleet = await fetchFleet();
-                    const activePlates = new Set();
+                const result = await sb
+                    .from('bus_location_history')
+                    .select('plate_number, lat, lon, recorded_at')
+                    .gte('recorded_at', start)
+                    .lt('recorded_at', end)
+                    .order('recorded_at', {{ ascending: true }});
 
-                    for (const bus of fleet) {{
-                        const plate = String(bus.plate_number);
-                        activePlates.add(plate);
+                if (result.error) throw result.error;
 
-                        const color = busColor(bus.line_id);
+                const grouped = {{}};
 
-                        // update / create live marker
-                        if (busMarkers[plate]) {{
-                            busMarkers[plate].setLatLng([bus.lat, bus.lon]);
-                            busMarkers[plate].setStyle({{
-                                fillColor: color,
-                                color: "#fff"
-                            }});
-                            busMarkers[plate].setTooltipContent(
-                                "<b>Bus:</b> " + plate +
-                                "<br><b>Line:</b> " + (bus.line_id || "-")
-                            );
+                for (const row of (result.data || [])) {{
+                    if (row.lat === null || row.lon === null) continue;
+                    const plate = String(row.plate_number);
+                    if (!grouped[plate]) grouped[plate] = [];
+                    grouped[plate].push([row.lat, row.lon]);
+                }}
+
+                return grouped;
+            }}
+
+            function clearAllHistoryLines() {{
+                Object.keys(historyLines).forEach(plate => {{
+                    map.removeLayer(historyLines[plate]);
+                    delete historyLines[plate];
+                }});
+            }}
+
+            async function renderLiveLayer() {{
+                if (!SHOW_LIVE) {{
+                    Object.keys(liveMarkers).forEach(plate => {{
+                        map.removeLayer(liveMarkers[plate]);
+                        delete liveMarkers[plate];
+                    }});
+                    Object.keys(liveTrails).forEach(plate => {{
+                        map.removeLayer(liveTrails[plate]);
+                        delete liveTrails[plate];
+                    }});
+                    updateCounts();
+                    return;
+                }}
+
+                const fleet = await fetchLiveFleet();
+                const activePlates = new Set();
+
+                for (const bus of fleet) {{
+                    const plate = String(bus.plate_number);
+                    const color = colorFromPlate(plate);
+                    activePlates.add(plate);
+
+                    if (liveMarkers[plate]) {{
+                        liveMarkers[plate].setLatLng([bus.lat, bus.lon]);
+                        liveMarkers[plate].setStyle({{
+                            fillColor: color,
+                            color: "#ffffff"
+                        }});
+                        liveMarkers[plate].setTooltipContent(
+                            "<b>Bus:</b> " + plate +
+                            "<br><b>Line:</b> " + (bus.line_id || "-") +
+                            "<br><b>Status:</b> Live"
+                        );
+                    }} else {{
+                        liveMarkers[plate] = L.circleMarker([bus.lat, bus.lon], {{
+                            radius: 9,
+                            fillColor: color,
+                            color: "#ffffff",
+                            weight: 2,
+                            opacity: 1,
+                            fillOpacity: 0.95
+                        }})
+                        .addTo(map)
+                        .bindTooltip(
+                            "<b>Bus:</b> " + plate +
+                            "<br><b>Line:</b> " + (bus.line_id || "-") +
+                            "<br><b>Status:</b> Live"
+                        );
+                    }}
+
+                    const coords = await fetchRecentPath(plate);
+                    if (coords.length > 1) {{
+                        if (liveTrails[plate]) {{
+                            liveTrails[plate].setLatLngs(coords);
+                            liveTrails[plate].setStyle({{ color }});
                         }} else {{
-                            busMarkers[plate] = L.circleMarker([bus.lat, bus.lon], {{
-                                radius: 9,
-                                fillColor: color,
-                                color: "#fff",
-                                weight: 2,
-                                opacity: 1,
-                                fillOpacity: 0.95
-                            }})
-                            .addTo(map)
-                            .bindTooltip(
-                                "<b>Bus:</b> " + plate +
-                                "<br><b>Line:</b> " + (bus.line_id || "-")
-                            );
-                        }}
-
-                        // fetch and draw path
-                        const coords = await fetchBusPath(plate);
-
-                        if (coords.length > 1) {{
-                            if (busTrails[plate]) {{
-                                busTrails[plate].setLatLngs(coords);
-                                busTrails[plate].setStyle({{
-                                    color: color
-                                }});
-                            }} else {{
-                                busTrails[plate] = L.polyline(coords, {{
-                                    color: color,
-                                    weight: 4,
-                                    opacity: 0.85
-                                }}).addTo(map);
-                            }}
+                            liveTrails[plate] = L.polyline(coords, {{
+                                color: color,
+                                weight: 4,
+                                opacity: 0.9
+                            }}).addTo(map);
                         }}
                     }}
+                }}
 
-                    // remove markers/trails for buses no longer active
-                    Object.keys(busMarkers).forEach(plate => {{
-                        if (!activePlates.has(plate)) {{
-                            map.removeLayer(busMarkers[plate]);
-                            delete busMarkers[plate];
-                        }}
-                    }});
-
-                    Object.keys(busTrails).forEach(plate => {{
-                        if (!activePlates.has(plate)) {{
-                            map.removeLayer(busTrails[plate]);
-                            delete busTrails[plate];
-                        }}
-                    }});
-
-                    // fit only first time so map does not keep jumping
-                    if (!firstFitDone && Object.keys(busMarkers).length > 0) {{
-                        fitToFleet();
-                        firstFitDone = true;
+                Object.keys(liveMarkers).forEach(plate => {{
+                    if (!activePlates.has(plate)) {{
+                        map.removeLayer(liveMarkers[plate]);
+                        delete liveMarkers[plate];
                     }}
+                }});
 
-                    badge('Live map', true);
+                Object.keys(liveTrails).forEach(plate => {{
+                    if (!activePlates.has(plate)) {{
+                        map.removeLayer(liveTrails[plate]);
+                        delete liveTrails[plate];
+                    }}
+                }});
 
-                }} catch (err) {{
-                    console.error(err);
-                    badge('Update failed', false);
+                if (!firstFitDone && Object.keys(liveMarkers).length > 0) {{
+                    fitToLive();
+                    firstFitDone = true;
+                }}
+
+                updateCounts();
+            }}
+
+            async function renderHistoryLayer() {{
+                clearAllHistoryLines();
+
+                if (!SHOW_HISTORY) {{
+                    updateCounts();
+                    return;
+                }}
+
+                const grouped = await fetchHistoryByDate(SELECTED_DATE);
+
+                Object.keys(grouped).forEach(plate => {{
+                    const coords = grouped[plate];
+                    if (coords.length < 2) return;
+
+                    const color = colorFromPlate(plate);
+
+                    historyLines[plate] = L.polyline(coords, {{
+                        color: color,
+                        weight: 5,
+                        opacity: 0.55
+                    }})
+                    .addTo(map)
+                    .bindTooltip(
+                        "<b>Bus:</b> " + plate +
+                        "<br><b>Date:</b> " + SELECTED_DATE +
+                        "<br><b>Points:</b> " + coords.length
+                    );
+                }});
+
+                updateCounts();
+
+                if (!SHOW_LIVE && Object.keys(historyLines).length > 0 && !firstFitDone) {{
+                    fitToHistory();
+                    firstFitDone = true;
                 }}
             }}
 
-            renderMapData();
-            setInterval(renderMapData, REFRESH_MS);
+            async function renderAll() {{
+                try {{
+                    setBadge('Updating map...', true);
+                    await renderHistoryLayer();
+                    await renderLiveLayer();
+                    setBadge('Live map', true);
+                }} catch (err) {{
+                    console.error(err);
+                    setBadge('Update failed', false);
+                }}
+            }}
+
+            renderAll();
+            setInterval(renderAll, REFRESH_MS);
         </script>
     </body>
     </html>
     """
 
-# =========================================================
-# 4. UI
-# =========================================================
-st.title("📊 Fleet Research Manager")
 
-col_top_1, col_top_2 = st.columns([1, 1])
-with col_top_1:
+# =========================================================
+# 4. SIDEBAR CONTROLS
+# =========================================================
+st.sidebar.header("🕹️ Controls")
+
+show_live = st.sidebar.toggle("Show live buses", value=True)
+show_history = st.sidebar.toggle("Show history lines", value=True)
+
+date_mode = st.sidebar.radio("History date mode", ["Today", "Custom"], index=0)
+
+if date_mode == "Today":
+    selected_date = date.today()
+else:
+    selected_date = st.sidebar.date_input("Choose date", value=date.today())
+
+selected_date_str = selected_date.strftime("%Y-%m-%d")
+
+st.sidebar.caption(f"History date: {selected_date_str}")
+
+
+# =========================================================
+# 5. PAGE UI
+# =========================================================
+st.title("Fleet Manager")
+
+top_col_1, top_col_2 = st.columns([1, 2])
+with top_col_1:
     if st.button("Refresh cards"):
         st.rerun()
-with col_top_2:
+with top_col_2:
     st.caption("The map updates by itself every 10 seconds without redrawing the whole page.")
 
 fleet = get_fleet_data()
 
+st.metric("Total Active Buses", len(fleet))
+
+st.subheader("🚐 Current Active Fleet")
+
 if fleet:
-    st.metric("Total Active Buses", len(fleet))
-
-    st.subheader("🚐 Current Active Fleet")
-
     for bus in fleet:
         with st.expander(f"🚌 Bus {bus['plate_number']} | Line: {bus.get('line_id', '-')}", expanded=False):
             col1, col2, col3 = st.columns(3)
@@ -332,12 +484,19 @@ if fleet:
                 col3.metric("Data Points", len(history))
             else:
                 st.info("No history yet.")
-
-    st.divider()
-    st.subheader("🌍 Live Fleet Positions + Route History")
-    components.html(build_map_html(URL, KEY), height=580)
-
 else:
     st.warning("No buses currently online.")
-    st.subheader("🌍 Live Fleet Positions + Route History")
-    components.html(build_map_html(URL, KEY), height=580)
+
+st.divider()
+st.subheader("🌍 Live Fleet Positions + History Lines")
+
+components.html(
+    build_map_html(
+        supabase_url=URL,
+        supabase_key=KEY,
+        show_live=show_live,
+        show_history=show_history,
+        selected_date_str=selected_date_str,
+    ),
+    height=640,
+)
