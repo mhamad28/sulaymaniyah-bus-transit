@@ -161,7 +161,7 @@ html,body{{width:100%;height:100%;background:#080d14;overflow:hidden;font-family
 <body>
 <div id="map"></div>
 
-<button id="recenter-btn" onclick="recenterMap()">🎯</button>
+<button id="recenter-btn" onclick="recenterMap()"></button>
 
 <div id="login-screen">
   <div id="login-card" class="glass">
