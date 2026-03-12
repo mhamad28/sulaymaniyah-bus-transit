@@ -168,7 +168,7 @@ html,body{{width:100%;height:100%;background:#080d14;overflow:hidden;font-family
     <div class="login-sub">پۆرتاڵی شوفێر</div>
 
     <div>
-      <div class="lbl">Plate Number — ژمارەی پلاک</div>
+      <div class="lbl">Plate Number — ژمارەی سەر پلەیت</div>
       <input class="inp" id="inp-plate" placeholder="e.g. 12 A 3456" autocomplete="off" oninput="checkForm()"/>
     </div>
     <div>
@@ -176,7 +176,7 @@ html,body{{width:100%;height:100%;background:#080d14;overflow:hidden;font-family
       <input class="inp" id="inp-name" placeholder="Your name" autocomplete="off" oninput="checkForm()"/>
     </div>
     <div>
-      <div class="lbl">Bus Line — هێڵی بەس</div>
+      <div class="lbl">Bus Line — هێڵی پاس</div>
       <select class="sel" id="sel-line" onchange="checkForm()">
         <option value="">— Choose your line —</option>
       </select>
