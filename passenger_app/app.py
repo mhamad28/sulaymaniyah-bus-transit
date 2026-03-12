@@ -6,7 +6,14 @@ from typing import Dict, List
 import streamlit as st
 import streamlit.components.v1 as components
 
-# --- 1. SETUP ---
+# --- 1. SETUP & UTILS ---
+sys.path.append(str(Path(__file__).resolve().parents[1] / "shared"))
+try:
+    from supabase_client import get_supabase
+    _SUPABASE_AVAILABLE = True
+except ImportError:
+    _SUPABASE_AVAILABLE = False
+
 st.set_page_config(page_title="Suly Transit", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
@@ -41,7 +48,24 @@ ROUTE_COLORS: Dict[str, str] = {
     "ZargatayTaza_Bazar": "#1b9e77",
 }
 
-# --- 2. HTML BUILDER ---
+@st.cache_data(hash_funcs={Path: lambda p: p.stat().st_mtime if p.exists() else 0})
+def load_routes(path: Path) -> dict:
+    if not path.exists():
+        return {"type": "FeatureCollection", "features": []}
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def fetch_live_buses() -> list:
+    if not _SUPABASE_AVAILABLE:
+        return []
+    try:
+        sb  = get_supabase()
+        res = sb.table("active_locations").select("*").eq("is_active", True).execute()
+        return res.data or []
+    except:
+        return []
+
+# --- 2. THE HTML/JS BUILDER ---
 def build_map_html(routes_geojson: dict, live_buses: list, supabase_url: str, supabase_key: str) -> str:
     geojson_str  = json.dumps(routes_geojson)
     colors_str   = json.dumps(ROUTE_COLORS)
@@ -55,12 +79,13 @@ def build_map_html(routes_geojson: dict, live_buses: list, supabase_url: str, su
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 * {{ margin:0; padding:0; box-sizing:border-box; }}
 html,body {{ width:100%; height:100%; background:#080d14; overflow:hidden; font-family:sans-serif; }}
 #map {{ width:100%; height:100vh; }}
 
-/* NEW CYAN TARGET BUTTON */
+/* CYAN TARGET BUTTON */
 #recenter-btn {{
   position: absolute; bottom: 110px; right: 20px; z-index: 1001;
   width: 50px; height: 50px; border-radius: 12px; background: #000000; 
@@ -83,6 +108,7 @@ html,body {{ width:100%; height:100%; background:#080d14; overflow:hidden; font-
 .pick-btn.red {{ border-color:#ef4444; }}
 .pick-btn.red.on {{ background:#ef4444; color:#fff; }}
 .coord-box {{ flex:2; background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.13); border-radius:8px; padding:7px; color:#fff; font-size:11px; }}
+.x-btn {{ width:24px; height:24px; border-radius:50%; border:none; background:rgba(255,255,255,0.1); color:#fff; cursor:pointer; }}
 </style>
 </head>
 <body>
@@ -93,10 +119,12 @@ html,body {{ width:100%; height:100%; background:#080d14; overflow:hidden; font-
   <div class="row">
     <button class="pick-btn green" id="btn-o" onclick="setMode('origin')">📍 Origin</button>
     <input class="coord-box" id="inp-o" placeholder="Origin Lat,Lon"/>
+    <button class="x-btn" onclick="clearPt('origin')">✕</button>
   </div>
   <div class="row">
     <button class="pick-btn red" id="btn-d" onclick="setMode('dest')">🏁 Destination</button>
     <input class="coord-box" id="inp-d" placeholder="Dest Lat,Lon"/>
+    <button class="x-btn" onclick="clearPt('dest')">✕</button>
   </div>
 </div>
 
@@ -106,6 +134,7 @@ L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png').addTo(
 
 let mode = '';
 let ptO = null, ptD = null;
+let mO = null, mD = null;
 
 function setMode(m) {{
     mode = m;
@@ -119,14 +148,16 @@ map.on('click', e => {{
     
     if(mode === 'origin') {{
         ptO = {{lat, lon}};
+        if(mO) map.removeLayer(mO);
+        mO = L.circleMarker([lat,lon], {{radius:8, fillColor:'#22c55e', color:'#fff', fillOpacity:1}}).addTo(map);
         document.getElementById('inp-o').value = lat.toFixed(5) + "," + lon.toFixed(5);
-        // THE AUTO-FLOW: Switch to destination mode automatically
-        setMode('dest');
+        setMode('dest'); // AUTO-FLOW
     }} else if(mode === 'dest') {{
         ptD = {{lat, lon}};
+        if(mD) map.removeLayer(mD);
+        mD = L.circleMarker([lat,lon], {{radius:8, fillColor:'#ef4444', color:'#fff', fillOpacity:1}}).addTo(map);
         document.getElementById('inp-d').value = lat.toFixed(5) + "," + lon.toFixed(5);
-        setMode(''); // End picking
-        console.log("Route ready from " + ptO.lat + " to " + ptD.lat);
+        setMode(''); 
     }}
 }});
 
@@ -134,18 +165,32 @@ function useMyLocation() {{
     navigator.geolocation.getCurrentPosition(pos => {{
         const lat = pos.coords.latitude, lon = pos.coords.longitude;
         ptO = {{lat, lon}};
+        if(mO) map.removeLayer(mO);
+        mO = L.circleMarker([lat,lon], {{radius:8, fillColor:'#22c55e', color:'#fff', fillOpacity:1}}).addTo(map);
         document.getElementById('inp-o').value = lat.toFixed(5) + "," + lon.toFixed(5);
         map.setView([lat, lon], 16);
-        setMode('dest'); // Auto-switch even after GPS
+        setMode('dest'); // AUTO-FLOW
     }});
+}}
+
+function clearPt(w) {{
+    if(w==='origin') {{ ptO=null; if(mO)map.removeLayer(mO); document.getElementById('inp-o').value=''; }}
+    else {{ ptD=null; if(mD)map.removeLayer(mD); document.getElementById('inp-d').value=''; }}
 }}
 </script>
 </body>
 </html>"""
 
+# --- 3. MAIN APP ---
 def main():
-    # Placeholder for route loading and live bus fetching
-    components.html(build_map_html({{}}, [], "", ""), height=900, scrolling=False)
+    routes_geojson = load_routes(ROUTES_FILE)
+    live_buses = fetch_live_buses()
+    
+    supa_url = st.secrets.get("SUPABASE_URL", "")
+    supa_key = st.secrets.get("SUPABASE_ANON_KEY", "")
+
+    # This passes the ACTUAL data instead of empty placeholders
+    components.html(build_map_html(routes_geojson, live_buses, supa_url, supa_key), height=900, scrolling=False)
 
 if __name__ == "__main__":
     main()
