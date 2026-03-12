@@ -33,7 +33,11 @@ st.markdown("""
 # =========================================================
 def get_fleet_data():
     try:
-        res = supabase.table("live_bus_data").select("*").execute()
+        res = (
+            supabase.table("live_bus_data")
+            .select("*")
+            .execute()
+        )
         return res.data or []
     except Exception:
         return []
@@ -54,9 +58,6 @@ def get_history_stats(plate):
 
 
 def get_history_rows_for_date(selected_date: date):
-    """
-    Pull all history rows for one calendar day.
-    """
     try:
         start_dt = datetime.combine(selected_date, datetime.min.time())
         end_dt = start_dt + timedelta(days=1)
@@ -103,7 +104,7 @@ def build_history_grouped(filtered_rows):
 st.title("Fleet Manager")
 
 # =========================================================
-# 4. MANUAL INQUIRY CONTROLS (ON PAGE, NOT SIDEBAR)
+# 4. MANUAL INQUIRY CONTROLS
 # =========================================================
 st.subheader("History Inquiry")
 
@@ -120,7 +121,6 @@ else:
     with ctrl2:
         selected_date = st.date_input("Choose date", value=date.today())
 
-# make sure selected_date always exists in all branches
 if date_mode != "Custom":
     with ctrl2:
         st.text_input("Chosen date", value=selected_date.strftime("%Y-%m-%d"), disabled=True)
@@ -144,15 +144,16 @@ grouped_history = build_history_grouped(filtered_history_rows)
 # =========================================================
 # 5. QUERY RESULT SUMMARY
 # =========================================================
+fleet = get_fleet_data()
+
 m1, m2, m3, m4 = st.columns(4)
-m1.metric("Total Active Buses", len(get_fleet_data()))
+m1.metric("Total Active Buses", len(fleet))
 m2.metric("History Rows Found", len(filtered_history_rows))
 m3.metric("History Buses Found", len(grouped_history))
 m4.metric("Selected Date", selected_date_str)
 
 # =========================================================
-# 6. OPTIONAL DATA PREVIEW
-# This gives you the manual control / inquiry feeling.
+# 6. DATA PREVIEW
 # =========================================================
 with st.expander("Show queried history data", expanded=False):
     if filtered_history_rows:
@@ -164,8 +165,6 @@ with st.expander("Show queried history data", expanded=False):
 # =========================================================
 # 7. LIVE FLEET CARDS
 # =========================================================
-fleet = get_fleet_data()
-
 top_col_1, top_col_2 = st.columns([1, 2])
 with top_col_1:
     if st.button("Refresh cards"):
@@ -195,8 +194,6 @@ else:
 
 # =========================================================
 # 8. MAP HTML
-# History is passed from Python directly.
-# Live buses update in JS every 10s without full map rerender.
 # =========================================================
 def build_map_html(
     supabase_url: str,
