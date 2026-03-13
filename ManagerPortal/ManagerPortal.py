@@ -1,5 +1,5 @@
 from datetime import datetime, date, timedelta
-
+import json
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
@@ -152,6 +152,8 @@ with ctrl3:
 with ctrl4:
     show_live = st.toggle("Show live buses", value=True)
     show_history = st.toggle("Show history", value=True)
+    # NEW: Color picker for history lines
+    history_line_color = st.color_picker("Line color", "#00E5FF")
 
 selected_date_str = selected_date.strftime("%Y-%m-%d")
 
@@ -221,9 +223,8 @@ def build_map_html(
     selected_date_str: str,
     selected_bus: str,
     grouped_history: dict,
+    line_color: str, # Added parameter
 ) -> str:
-    import json
-
     history_json = json.dumps(grouped_history)
 
     return f"""
@@ -300,14 +301,8 @@ def build_map_html(
                 cursor: pointer;
                 box-shadow: 0 4px 16px rgba(0,0,0,.35);
             }}
-            #fit-live-btn {{
-                top: 12px;
-                left: 56px;
-            }}
-            #fit-history-btn {{
-                top: 56px;
-                left: 56px;
-            }}
+            #fit-live-btn {{ top: 12px; left: 56px; }}
+            #fit-history-btn {{ top: 56px; left: 56px; }}
         </style>
     </head>
     <body>
@@ -321,8 +316,8 @@ def build_map_html(
         <div class="mini-info">
             <div><strong>Date:</strong> {selected_date_str}</div>
             <div><strong>Bus:</strong> {selected_bus}</div>
-            <div><strong>Live buses shown:</strong> <span id="live-count">0</span></div>
-            <div><strong>History buses shown:</strong> <span id="history-count">0</span></div>
+            <div><strong>Live buses:</strong> <span id="live-count">0</span></div>
+            <div><strong>History buses:</strong> <span id="history-count">0</span></div>
         </div>
 
         <script>
@@ -331,30 +326,23 @@ def build_map_html(
             const SHOW_LIVE = {str(show_live).lower()};
             const SHOW_HISTORY = {str(show_history).lower()};
             const SELECTED_BUS = "{selected_bus}";
+            const HISTORY_COLOR = "{line_color}"; // Link to Streamlit picker
             const REFRESH_MS = 10000;
             const DEFAULT_CENTER = [35.56, 45.43];
             const DEFAULT_ZOOM = 12;
             const HISTORY_DATA = {history_json};
 
             const {{ createClient }} = supabase;
-            const sb = createClient(SUPA_URL, SUPA_KEY, {{
-                auth: {{ persistSession: false }}
-            }});
+            const sb = createClient(SUPA_URL, SUPA_KEY, {{ auth: {{ persistSession: false }} }});
 
-            const map = L.map('map', {{
-                center: DEFAULT_CENTER,
-                zoom: DEFAULT_ZOOM
-            }});
-
+            const map = L.map('map', {{ center: DEFAULT_CENTER, zoom: DEFAULT_ZOOM }});
             L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-                attribution: '© OpenStreetMap',
-                maxZoom: 19
+                attribution: '© OpenStreetMap', maxZoom: 19
             }}).addTo(map);
 
             const liveMarkers = {{}};
             const liveTrails = {{}};
             const historyLines = {{}};
-
             let firstFitDone = false;
 
             function setBadge(text, ok = true) {{
@@ -364,173 +352,89 @@ def build_map_html(
                 el.style.borderColor = ok ? 'rgba(34,197,94,.35)' : 'rgba(239,68,68,.35)';
             }}
 
-            function updateCounts() {{
-                document.getElementById('live-count').textContent = Object.keys(liveMarkers).length;
-                document.getElementById('history-count').textContent = Object.keys(historyLines).length;
-            }}
-
             function colorFromPlate(plate) {{
                 const s = String(plate);
                 let hash = 0;
-                for (let i = 0; i < s.length; i++) {{
-                    hash = s.charCodeAt(i) + ((hash << 5) - hash);
-                }}
-                const hue = Math.abs(hash) % 360;
-                return `hsl(${{hue}}, 78%, 55%)`;
+                for (let i = 0; i < s.length; i++) {{ hash = s.charCodeAt(i) + ((hash << 5) - hash); }}
+                return `hsl(${{Math.abs(hash) % 360}}, 78%, 55%)`;
             }}
 
             function fitToLive() {{
                 const layers = Object.values(liveMarkers);
-                if (!layers.length) return;
-                const group = new L.featureGroup(layers);
-                map.fitBounds(group.getBounds().pad(0.2));
+                if (layers.length) map.fitBounds(new L.featureGroup(layers).getBounds().pad(0.2));
             }}
 
             function fitToHistory() {{
                 const layers = Object.values(historyLines);
-                if (!layers.length) return;
-                const group = new L.featureGroup(layers);
-                map.fitBounds(group.getBounds().pad(0.15));
+                if (layers.length) map.fitBounds(new L.featureGroup(layers).getBounds().pad(0.15));
             }}
 
             async function fetchLiveFleet() {{
-                const result = await sb
-                    .from('live_bus_data')
-                    .select('*');
-
+                const result = await sb.from('live_bus_data').select('*');
                 if (result.error) throw result.error;
                 return result.data || [];
             }}
 
             async function fetchRecentPath(plate) {{
-                const result = await sb
-                    .from('bus_location_history')
-                    .select('lat, lon, recorded_at')
-                    .eq('plate_number', String(plate))
-                    .order('recorded_at', {{ ascending: false }})
-                    .limit(300);
-
+                const result = await sb.from('bus_location_history').select('lat, lon')
+                    .eq('plate_number', String(plate)).order('recorded_at', {{ ascending: false }}).limit(300);
                 if (result.error) throw result.error;
-
-                const rows = result.data || [];
-                rows.reverse();
-
-                return rows
-                    .filter(r => r.lat !== null && r.lon !== null)
-                    .map(r => [r.lat, r.lon]);
-            }}
-
-            function clearHistoryLines() {{
-                Object.keys(historyLines).forEach(plate => {{
-                    map.removeLayer(historyLines[plate]);
-                    delete historyLines[plate];
-                }});
+                return (result.data || []).reverse().filter(r => r.lat && r.lon).map(r => [r.lat, r.lon]);
             }}
 
             function renderHistoryLayer() {{
-                clearHistoryLines();
-
-                if (!SHOW_HISTORY) {{
-                    updateCounts();
-                    return;
-                }}
+                Object.keys(historyLines).forEach(p => map.removeLayer(historyLines[p]));
+                if (!SHOW_HISTORY) return;
 
                 Object.keys(HISTORY_DATA).forEach(plate => {{
                     const coords = HISTORY_DATA[plate];
                     if (!coords || coords.length < 2) return;
-
-                    const color = colorFromPlate(plate);
-
+                    
                     historyLines[plate] = L.polyline(coords, {{
-                        color: color,
-                        weight: 5,
-                        opacity: 0.7
-                    }})
-                    .addTo(map)
-                    .bindTooltip(
-                        "<b>Bus:</b> " + plate +
-                        "<br><b>Status:</b> History" +
-                        "<br><b>Points:</b> " + coords.length
-                    );
+                        color: HISTORY_COLOR, // Use the selected color
+                        weight: 5, opacity: 0.7
+                    }}).addTo(map).bindTooltip("Bus: " + plate);
                 }});
 
-                updateCounts();
-
                 if (Object.keys(historyLines).length > 0 && !firstFitDone) {{
-                    fitToHistory();
-                    firstFitDone = true;
+                    fitToHistory(); firstFitDone = true;
                 }}
             }}
 
             async function renderLiveLayer() {{
-                Object.keys(liveMarkers).forEach(plate => {{
-                    map.removeLayer(liveMarkers[plate]);
-                    delete liveMarkers[plate];
-                }});
-                Object.keys(liveTrails).forEach(plate => {{
-                    map.removeLayer(liveTrails[plate]);
-                    delete liveTrails[plate];
-                }});
-
-                if (!SHOW_LIVE) {{
-                    updateCounts();
-                    return;
-                }}
+                Object.keys(liveMarkers).forEach(p => map.removeLayer(liveMarkers[p]));
+                Object.keys(liveTrails).forEach(p => map.removeLayer(liveTrails[p]));
+                if (!SHOW_LIVE) return;
 
                 const fleet = await fetchLiveFleet();
-
                 for (const bus of fleet) {{
                     const plate = String(bus.plate_number);
-
-                    if (SELECTED_BUS !== "All buses" && plate !== SELECTED_BUS) {{
-                        continue;
-                    }}
+                    if (SELECTED_BUS !== "All buses" && plate !== SELECTED_BUS) continue;
 
                     const color = colorFromPlate(plate);
-
                     liveMarkers[plate] = L.circleMarker([bus.lat, bus.lon], {{
-                        radius: 9,
-                        fillColor: color,
-                        color: "#ffffff",
-                        weight: 2,
-                        opacity: 1,
-                        fillOpacity: 0.95
-                    }})
-                    .addTo(map)
-                    .bindTooltip(
-                        "<b>Bus:</b> " + plate +
-                        "<br><b>Line:</b> " + (bus.line_id || "-") +
-                        "<br><b>Status:</b> Live"
-                    );
+                        radius: 9, fillColor: color, color: "#fff", weight: 2, fillOpacity: 0.95
+                    }}).addTo(map);
 
-                    const coords = await fetchRecentPath(plate);
-                    if (coords.length > 1) {{
-                        liveTrails[plate] = L.polyline(coords, {{
-                            color: color,
-                            weight: 4,
-                            opacity: 0.95
-                        }}).addTo(map);
+                    const path = await fetchRecentPath(plate);
+                    if (path.length > 1) {{
+                        liveTrails[plate] = L.polyline(path, {{ color: color, weight: 4, opacity: 0.95 }}).addTo(map);
                     }}
                 }}
-
                 if (!firstFitDone && Object.keys(liveMarkers).length > 0 && Object.keys(historyLines).length === 0) {{
-                    fitToLive();
-                    firstFitDone = true;
+                    fitToLive(); firstFitDone = true;
                 }}
-
-                updateCounts();
             }}
 
             async function renderAll() {{
                 try {{
-                    setBadge('Updating map...', true);
+                    setBadge('Updating...', true);
                     renderHistoryLayer();
                     await renderLiveLayer();
-                    setBadge('Map loaded', true);
-                }} catch (err) {{
-                    console.error(err);
-                    setBadge('Update failed', false);
-                }}
+                    document.getElementById('live-count').textContent = Object.keys(liveMarkers).length;
+                    document.getElementById('history-count').textContent = Object.keys(historyLines).length;
+                    setBadge('Map ready', true);
+                }} catch (err) {{ setBadge('Error', false); }}
             }}
 
             renderAll();
@@ -555,6 +459,7 @@ components.html(
         selected_date_str=selected_date_str,
         selected_bus=selected_bus,
         grouped_history=grouped_history,
+        line_color=history_line_color,
     ),
     height=660,
 )
